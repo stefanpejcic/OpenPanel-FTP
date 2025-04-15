@@ -39,7 +39,6 @@
                 <tr>
                     <th>Username</th>
                     <th>Directory</th>
-                    <th>Quota (Soft/Hard)</th>
                     <th>Actions</th>
                 </tr>
             </thead>
@@ -48,7 +47,6 @@
                 <tr>
                     <td>{{ account.username }}</td>
                     <td>{{ account.directory }}</td>
-                    <td>{{ account.quota_soft }}MB / {{ account.quota_hard }}MB</td>
                     <td>
                         <div class="btn-group" role="group">
                             <a href="/ftp/edit/{{ account.username }}" class="btn btn-sm btn-primary">

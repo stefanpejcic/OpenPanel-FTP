@@ -27,14 +27,12 @@ from modules.core.config import php_version_for_phpmyadmin_in_containers
 
 # Constants
 MAX_FTP_ACCOUNTS_PER_USER = 5  # Default limit
-DEFAULT_QUOTA_SOFT = 1024  # 1GB in MB
-DEFAULT_QUOTA_HARD = 2048  # 2GB in MB
+DEFAULT_QUOTA_SOFT = 1024  # 1GB in MB (UI only, not enforced)
+DEFAULT_QUOTA_HARD = 2048  # 2GB in MB (UI only, not enforced)
 FTP_USERS_DIR = "/etc/openpanel/ftp/users"
-FTP_GROUPS_DIR = "/etc/openpanel/ftp/groups"
 
 # Create directories if they don't exist
 os.makedirs(FTP_USERS_DIR, exist_ok=True)
-os.makedirs(FTP_GROUPS_DIR, exist_ok=True)
 
 def get_max_ftp_accounts(username):
     """Get the maximum number of FTP accounts allowed for a user"""
@@ -95,7 +93,7 @@ def create_ftp_account(openpanel_username, ftp_username, password, folder, quota
     # Append to users.list
     user_list_file = os.path.join(user_dir, "users.list")
     with open(user_list_file, "a") as f:
-        f.write(f"{ftp_username}|{password}|{folder}|||{quota_soft}|{quota_hard}\n")
+        f.write(f"{ftp_username}|{password}|{folder}\n")
 
     # Restart FTP service to apply changes
     try:
@@ -121,7 +119,7 @@ def delete_ftp_account(openpanel_username, ftp_username):
     new_lines = []
     found = False
     for line in lines:
-        if line.strip() and line.split('|')[0] == ftp_username:
+        if line.strip() and line.split('|', 2)[0] == ftp_username:
             found = True
         else:
             new_lines.append(line)
@@ -153,19 +151,16 @@ def list_ftp_accounts(openpanel_username):
     with open(user_list_file, "r") as f:
         for line in f:
             if line.strip():
-                parts = line.strip().split('|')
+                parts = line.strip().split('|', 2)
                 account = {
                     "username": parts[0],
-                    "directory": parts[2] if len(parts) > 2 and parts[2] else f"/ftp/{parts[0]}",
-                    "quota_soft": parts[5] if len(parts) > 5 and parts[5] else DEFAULT_QUOTA_SOFT,
-                    "quota_hard": parts[6] if len(parts) > 6 and parts[6] else DEFAULT_QUOTA_HARD
+                    "directory": parts[2] if len(parts) > 2 else f"/ftp/{parts[0]}"
                 }
                 accounts.append(account)
 
     return accounts
 
-def update_ftp_account(openpanel_username, ftp_username, new_password=None, new_folder=None,
-                     new_quota_soft=None, new_quota_hard=None):
+def update_ftp_account(openpanel_username, ftp_username, new_password=None, new_folder=None):
     """Update an existing FTP account"""
     user_list_file = os.path.join(FTP_USERS_DIR, openpanel_username, "users.list")
 
@@ -184,16 +179,12 @@ def update_ftp_account(openpanel_username, ftp_username, new_password=None, new_
             new_lines.append(line)
             continue
 
-        parts = line.strip().split('|')
+        parts = line.strip().split('|', 2)
         if parts[0] == ftp_username:
             found = True
             # Keep original values if new ones not provided
             password = new_password if new_password is not None else parts[1]
-            folder = new_folder if new_folder is not None else parts[2]
-            uid = parts[3] if len(parts) > 3 else ""
-            gid = parts[4] if len(parts) > 4 else ""
-            quota_soft = new_quota_soft if new_quota_soft is not None else (parts[5] if len(parts) > 5 and parts[5] else DEFAULT_QUOTA_SOFT)
-            quota_hard = new_quota_hard if new_quota_hard is not None else (parts[6] if len(parts) > 6 and parts[6] else DEFAULT_QUOTA_HARD)
+            folder = new_folder if new_folder is not None else (parts[2] if len(parts) > 2 else f"/ftp/{ftp_username}")
 
             # Validate folder if changed
             if new_folder is not None:
@@ -201,7 +192,7 @@ def update_ftp_account(openpanel_username, ftp_username, new_password=None, new_
                 if not valid:
                     return False, message
 
-            new_lines.append(f"{ftp_username}|{password}|{folder}|{uid}|{gid}|{quota_soft}|{quota_hard}\n")
+            new_lines.append(f"{ftp_username}|{password}|{folder}\n")
         else:
             new_lines.append(line)
 
@@ -220,68 +211,6 @@ def update_ftp_account(openpanel_username, ftp_username, new_password=None, new_
         pass
 
     return True, "FTP account updated successfully"
-
-def create_ftp_group(group_name, members=None, gid=None):
-    """Create a new FTP group"""
-    groups_file = os.path.join(FTP_GROUPS_DIR, "groups.list")
-    os.makedirs(os.path.dirname(groups_file), exist_ok=True)
-
-    # Check if group already exists
-    if os.path.exists(groups_file):
-        with open(groups_file, "r") as f:
-            for line in f:
-                if line.strip() and line.split('|')[0] == group_name:
-                    return False, "Group already exists"
-
-    # Create the group
-    members_str = ",".join(members) if members else ""
-    with open(groups_file, "a") as f:
-        f.write(f"{group_name}|{gid or ''}|{members_str}\n")
-
-    # Restart FTP service to apply changes
-    try:
-        subprocess.run(["docker", "restart", "openadmin_ftp"], check=True)
-    except subprocess.SubprocessError:
-        # Don't fail if Docker container isn't running
-        pass
-
-    return True, "FTP group created successfully"
-
-def delete_ftp_group(group_name):
-    """Delete an FTP group"""
-    groups_file = os.path.join(FTP_GROUPS_DIR, "groups.list")
-
-    if not os.path.exists(groups_file):
-        return False, "Groups file not found"
-
-    # Read existing groups
-    with open(groups_file, "r") as f:
-        lines = f.readlines()
-
-    # Filter out the group to delete
-    new_lines = []
-    found = False
-    for line in lines:
-        if line.strip() and line.split('|')[0] == group_name:
-            found = True
-        else:
-            new_lines.append(line)
-
-    if not found:
-        return False, "Group not found"
-
-    # Write back filtered groups
-    with open(groups_file, "w") as f:
-        f.writelines(new_lines)
-
-    # Restart FTP service to apply changes
-    try:
-        subprocess.run(["docker", "restart", "openadmin_ftp"], check=True)
-    except subprocess.SubprocessError:
-        # Don't fail if Docker container isn't running
-        pass
-
-    return True, "FTP group deleted successfully"
 
 # OpenPanel/OpenAdmin Flask routes
 
@@ -312,10 +241,8 @@ def ftp_create_account():
         ftp_username = request.form.get('ftp_username')
         password = request.form.get('password')
         folder = request.form.get('folder')
-        quota_soft = request.form.get('quota_soft', DEFAULT_QUOTA_SOFT)
-        quota_hard = request.form.get('quota_hard', DEFAULT_QUOTA_HARD)
 
-        success, message = create_ftp_account(username, ftp_username, password, folder, quota_soft, quota_hard)
+        success, message = create_ftp_account(username, ftp_username, password, folder)
 
         if success:
             flash("FTP account created successfully", "success")
@@ -354,12 +281,9 @@ def ftp_edit_account(ftp_username):
     if request.method == 'POST':
         new_password = request.form.get('password')
         new_folder = request.form.get('folder')
-        quota_soft = request.form.get('quota_soft')
-        quota_hard = request.form.get('quota_hard')
 
         success, message = update_ftp_account(username, ftp_username,
-                                            new_password, new_folder,
-                                            quota_soft, quota_hard)
+                                            new_password, new_folder)
 
         if success:
             log_user_action(session.get('user_id'), f"Updated FTP account: {ftp_username}")
@@ -379,73 +303,3 @@ def ftp_edit_account(ftp_username):
     return render_template('ftp/edit_account.html',
                           account=account,
                           home_dir=f"/home/{username}")
-
-# Admin-specific routes
-@app.route('/admin/ftp/groups', methods=['GET'])
-@login_required_route
-def admin_ftp_groups():
-    """Admin FTP Group Management"""
-    # Read groups from file
-    groups = []
-    groups_file = os.path.join(FTP_GROUPS_DIR, "groups.list")
-
-    if os.path.exists(groups_file):
-        with open(groups_file, "r") as f:
-            for line in f:
-                if line.strip():
-                    parts = line.strip().split('|')
-                    group = {
-                        "name": parts[0],
-                        "gid": parts[1] if len(parts) > 1 and parts[1] else "",
-                        "members": parts[2].split(',') if len(parts) > 2 and parts[2] else []
-                    }
-                    groups.append(group)
-
-    return render_template('admin/ftp/groups.html', groups=groups)
-
-@app.route('/admin/ftp/create_group', methods=['GET', 'POST'])
-@login_required_route
-def admin_create_ftp_group():
-    """Admin Create FTP Group"""
-    if request.method == 'POST':
-        group_name = request.form.get('group_name')
-        gid = request.form.get('gid')
-        members = request.form.getlist('members')
-
-        success, message = create_ftp_group(group_name, members, gid)
-
-        if success:
-            log_user_action(session.get('user_id'), f"Created FTP group: {group_name}")
-            flash("FTP group created successfully", "success")
-            return redirect('/admin/ftp/groups')
-        else:
-            flash(f"Error creating FTP group: {message}", "error")
-
-    # Get all users for member selection
-    users = []
-    try:
-        # This would depend on how your system stores users
-        # Example: reading from passwd file
-        with open("/etc/passwd", "r") as f:
-            for line in f:
-                parts = line.split(':')
-                if int(parts[2]) >= 1000 and not parts[0].startswith('_'):
-                    users.append(parts[0])
-    except:
-        pass
-
-    return render_template('admin/ftp/create_group.html', users=users)
-
-@app.route('/admin/ftp/delete_group/<group_name>', methods=['POST'])
-@login_required_route
-def admin_delete_ftp_group(group_name):
-    """Admin Delete FTP Group"""
-    success, message = delete_ftp_group(group_name)
-
-    if success:
-        log_user_action(session.get('user_id'), f"Deleted FTP group: {group_name}")
-        flash("FTP group deleted successfully", "success")
-    else:
-        flash(f"Error deleting FTP group: {message}", "error")
-
-    return redirect('/admin/ftp/groups')

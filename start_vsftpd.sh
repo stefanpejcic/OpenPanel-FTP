@@ -17,34 +17,18 @@ get_ip_address() {
   hostname -I | awk '{print $1}'
 }
 
-# Function to set disk quota for a user
-set_user_quota() {
-  local USERNAME="$1"
-  local SOFT_LIMIT="$2"  # in MB
-  local HARD_LIMIT="$3"  # in MB
-
-  # Convert MB to blocks (1 block = 1KB in quota system)
-  local SOFT_BLOCKS=$((SOFT_LIMIT * 1024))
-  local HARD_BLOCKS=$((HARD_LIMIT * 1024))
-
-  if [ -x "$(command -v setquota)" ]; then
-    setquota -u "$USERNAME" $SOFT_BLOCKS $HARD_BLOCKS 0 0 -a
-    echo "Quota set for $USERNAME: soft=$SOFT_LIMIT MB, hard=$HARD_LIMIT MB"
-  else
-    echo "Warning: setquota command not found. Quotas not set for $USERNAME."
-  fi
-}
-
 # Function to read users from users.list files and create them
 create_users() {
   USER_LIST_FILES=$(find /etc/openpanel/ftp/users/ -name 'users.list')
 
   for USER_LIST_FILE in $USER_LIST_FILES; do
     BASE_DIR=$(dirname "$USER_LIST_FILE")
+    OWNER=$(basename "$BASE_DIR")
     while IFS='|' read -r NAME PASS FOLDER UID GID QUOTA_SOFT QUOTA_HARD; do
       [ -z "$NAME" ] && continue  # Skip empty lines
 
-      GROUP=$NAME
+      # All sub-users are in the OpenPanel user's group
+      GROUP=$OWNER
 
       if [ -z "$FOLDER" ]; then
         FOLDER="/ftp/$NAME"
@@ -56,71 +40,20 @@ create_users() {
         continue
       fi
 
-      if [ ! -z "$UID" ]; then
-        UID_OPT="-u $UID"
-        if [ -z "$GID" ]; then
-          GID=$UID
-        fi
-        GROUP=$(getent group "$GID" | cut -d: -f1)
-        if [ ! -z "$GROUP" ]; then
-          GROUP_OPT="-G $GROUP"
-        elif [ ! -z "$GID" ]; then
-          addgroup -g "$GID" "$NAME"
-          GROUP_OPT="-G $NAME"
-        fi
+      # Always use the OpenPanel user's group
+      if ! getent group "$GROUP" > /dev/null; then
+        addgroup "$GROUP"
       fi
 
-      echo -e "$PASS\n$PASS" | adduser -h "$FOLDER" -s /sbin/nologin "$UID_OPT" "$GROUP_OPT" "$NAME"
+      echo -e "$PASS\n$PASS" | adduser -h "$FOLDER" -s /sbin/nologin "$NAME" -G "$GROUP"
       mkdir -p "$FOLDER"
       chown "$NAME":"$GROUP" "$FOLDER"
-
-      # Set quota if provided
-      if [ ! -z "$QUOTA_SOFT" ] && [ ! -z "$QUOTA_HARD" ]; then
-        set_user_quota "$NAME" "$QUOTA_SOFT" "$QUOTA_HARD"
-      fi
-
-      unset NAME PASS FOLDER UID GID GROUP UID_OPT GROUP_OPT QUOTA_SOFT QUOTA_HARD
+      unset NAME PASS FOLDER UID GID GROUP QUOTA_SOFT QUOTA_HARD
     done < "$USER_LIST_FILE"
   done
 }
 
-# Function to create and manage FTP groups
-create_ftp_groups() {
-  GROUP_LIST_FILES=$(find /etc/openpanel/ftp/groups/ -name 'groups.list' 2>/dev/null)
-
-  for GROUP_LIST_FILE in $GROUP_LIST_FILES; do
-    while IFS='|' read -r GROUP_NAME GID MEMBERS; do
-      [ -z "$GROUP_NAME" ] && continue  # Skip empty lines
-
-      # Create group if it doesn't exist
-      if ! getent group "$GROUP_NAME" > /dev/null; then
-        if [ ! -z "$GID" ]; then
-          addgroup -g "$GID" "$GROUP_NAME"
-        else
-          addgroup "$GROUP_NAME"
-        fi
-        echo "Created FTP group: $GROUP_NAME"
-      fi
-
-      # Add members to group if specified
-      if [ ! -z "$MEMBERS" ]; then
-        for MEMBER in $(echo "$MEMBERS" | tr ',' ' '); do
-          if id -u "$MEMBER" >/dev/null 2>&1; then
-            adduser "$MEMBER" "$GROUP_NAME"
-            echo "Added $MEMBER to group $GROUP_NAME"
-          else
-            echo "Warning: User $MEMBER does not exist, cannot add to group $GROUP_NAME"
-          fi
-        done
-      fi
-
-      unset GROUP_NAME GID MEMBERS
-    done < "$GROUP_LIST_FILE"
-  done
-}
-
-# Call the functions to create users and groups
-create_ftp_groups
+# Call the function to create users
 create_users
 
 # Set default passive mode port range if not specified
