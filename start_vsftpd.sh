@@ -3,19 +3,6 @@
 #Remove all ftp users
 grep '/ftp/' /etc/passwd | cut -d':' -f1 | xargs -r -n1 deluser
 
-#Create users
-#USERS='name1|password1|[folder1][|uid1][|gid1] name2|password2|[folder2][|uid2][|gid2]'
-#may be:
-# user|password foo|bar|/home/foo
-#OR
-# user|password|/home/user/dir|10000
-#OR
-# user|password|/home/user/dir|10000|10000
-#OR
-# user|password||10000|82
-
-#no default user
-
 # Function to determine if a hostname is a FQDN
 is_fqdn() {
   if [[ $1 =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
@@ -30,13 +17,31 @@ get_ip_address() {
   hostname -I | awk '{print $1}'
 }
 
+# Function to set disk quota for a user
+set_user_quota() {
+  local USERNAME="$1"
+  local SOFT_LIMIT="$2"  # in MB
+  local HARD_LIMIT="$3"  # in MB
+
+  # Convert MB to blocks (1 block = 1KB in quota system)
+  local SOFT_BLOCKS=$((SOFT_LIMIT * 1024))
+  local HARD_BLOCKS=$((HARD_LIMIT * 1024))
+
+  if [ -x "$(command -v setquota)" ]; then
+    setquota -u "$USERNAME" $SOFT_BLOCKS $HARD_BLOCKS 0 0 -a
+    echo "Quota set for $USERNAME: soft=$SOFT_LIMIT MB, hard=$HARD_LIMIT MB"
+  else
+    echo "Warning: setquota command not found. Quotas not set for $USERNAME."
+  fi
+}
+
 # Function to read users from users.list files and create them
 create_users() {
   USER_LIST_FILES=$(find /etc/openpanel/ftp/users/ -name 'users.list')
 
   for USER_LIST_FILE in $USER_LIST_FILES; do
     BASE_DIR=$(dirname "$USER_LIST_FILE")
-    while IFS='|' read -r NAME PASS FOLDER UID GID; do
+    while IFS='|' read -r NAME PASS FOLDER UID GID QUOTA_SOFT QUOTA_HARD; do
       [ -z "$NAME" ] && continue  # Skip empty lines
 
       GROUP=$NAME
@@ -56,24 +61,66 @@ create_users() {
         if [ -z "$GID" ]; then
           GID=$UID
         fi
-        GROUP=$(getent group $GID | cut -d: -f1)
+        GROUP=$(getent group "$GID" | cut -d: -f1)
         if [ ! -z "$GROUP" ]; then
           GROUP_OPT="-G $GROUP"
         elif [ ! -z "$GID" ]; then
-          addgroup -g $GID $NAME
+          addgroup -g "$GID" "$NAME"
           GROUP_OPT="-G $NAME"
         fi
       fi
 
-      echo -e "$PASS\n$PASS" | adduser -h $FOLDER -s /sbin/nologin $UID_OPT $GROUP_OPT $NAME
-      mkdir -p $FOLDER
-      chown $NAME:$GROUP $FOLDER
-      unset NAME PASS FOLDER UID GID GROUP UID_OPT GROUP_OPT
+      echo -e "$PASS\n$PASS" | adduser -h "$FOLDER" -s /sbin/nologin "$UID_OPT" "$GROUP_OPT" "$NAME"
+      mkdir -p "$FOLDER"
+      chown "$NAME":"$GROUP" "$FOLDER"
+
+      # Set quota if provided
+      if [ ! -z "$QUOTA_SOFT" ] && [ ! -z "$QUOTA_HARD" ]; then
+        set_user_quota "$NAME" "$QUOTA_SOFT" "$QUOTA_HARD"
+      fi
+
+      unset NAME PASS FOLDER UID GID GROUP UID_OPT GROUP_OPT QUOTA_SOFT QUOTA_HARD
     done < "$USER_LIST_FILE"
   done
 }
 
-# Call the function to create users
+# Function to create and manage FTP groups
+create_ftp_groups() {
+  GROUP_LIST_FILES=$(find /etc/openpanel/ftp/groups/ -name 'groups.list' 2>/dev/null)
+
+  for GROUP_LIST_FILE in $GROUP_LIST_FILES; do
+    while IFS='|' read -r GROUP_NAME GID MEMBERS; do
+      [ -z "$GROUP_NAME" ] && continue  # Skip empty lines
+
+      # Create group if it doesn't exist
+      if ! getent group "$GROUP_NAME" > /dev/null; then
+        if [ ! -z "$GID" ]; then
+          addgroup -g "$GID" "$GROUP_NAME"
+        else
+          addgroup "$GROUP_NAME"
+        fi
+        echo "Created FTP group: $GROUP_NAME"
+      fi
+
+      # Add members to group if specified
+      if [ ! -z "$MEMBERS" ]; then
+        for MEMBER in $(echo "$MEMBERS" | tr ',' ' '); do
+          if id -u "$MEMBER" >/dev/null 2>&1; then
+            adduser "$MEMBER" "$GROUP_NAME"
+            echo "Added $MEMBER to group $GROUP_NAME"
+          else
+            echo "Warning: User $MEMBER does not exist, cannot add to group $GROUP_NAME"
+          fi
+        done
+      fi
+
+      unset GROUP_NAME GID MEMBERS
+    done < "$GROUP_LIST_FILE"
+  done
+}
+
+# Call the functions to create users and groups
+create_ftp_groups
 create_users
 
 # Set default passive mode port range if not specified
@@ -108,7 +155,7 @@ fi
 if [ ! -z "$1" ]; then
   exec "$@"
 else
-  vsftpd -opasv_min_port=$MIN_PORT -opasv_max_port=$MAX_PORT $ADDR_OPT $TLS_OPT /etc/vsftpd/vsftpd.conf
+  vsftpd -opasv_min_port="$MIN_PORT" -opasv_max_port="$MAX_PORT" "$ADDR_OPT" "$TLS_OPT" /etc/vsftpd/vsftpd.conf
   [ -d /var/run/vsftpd ] || mkdir /var/run/vsftpd
   pgrep vsftpd | tail -n 1 > /var/run/vsftpd/vsftpd.pid
   exec pidproxy /var/run/vsftpd/vsftpd.pid true

@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}Edit FTP Account{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <h2 class="card-title mb-0">Edit FTP Account: {{ account.username }}</h2>
+        </div>
+        <div class="card-body">
+            <form method="POST" action="/ftp/edit/{{ account.username }}">
+                <div class="form-group">
+                    <label for="username">Username</label>
+                    <input type="text" class="form-control" id="username" value="{{ account.username }}" disabled>
+                    <small class="form-text text-muted">Username cannot be changed</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="password">Password</label>
+                    <div class="input-group">
+                        <input type="password" class="form-control" id="password" name="password"
+                               placeholder="Enter new password (leave empty to keep current)">
+                        <div class="input-group-append">
+                            <button class="btn btn-outline-secondary" type="button" id="toggle-password">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <small class="form-text text-muted">Leave blank to keep the current password</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="folder">Directory <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="folder" name="folder"
+                           required value="{{ account.directory }}">
+                    <small class="form-text text-muted">Directory must be inside your home directory</small>
+                </div>
+
+                <div class="row">
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="quota_soft">Soft Quota (MB)</label>
+                            <input type="number" class="form-control" id="quota_soft" name="quota_soft"
+                                   placeholder="Soft quota in MB" value="{{ account.quota_soft }}">
+                            <small class="form-text text-muted">Warning threshold</small>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="form-group">
+                            <label for="quota_hard">Hard Quota (MB)</label>
+                            <input type="number" class="form-control" id="quota_hard" name="quota_hard"
+                                   placeholder="Hard quota in MB" value="{{ account.quota_hard }}">
+                            <small class="form-text text-muted">Maximum allowed disk usage</small>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group mt-4">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Save Changes
+                    </button>
+                    <a href="/ftp" class="btn btn-secondary ml-2">
+                        <i class="fas fa-times"></i> Cancel
+                    </a>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('toggle-password').addEventListener('click', function() {
+    var passwordField = document.getElementById('password');
+    var passwordIcon = this.querySelector('i');
+
+    if (passwordField.type === 'password') {
+        passwordField.type = 'text';
+        passwordIcon.classList.remove('fa-eye');
+        passwordIcon.classList.add('fa-eye-slash');
+    } else {
+        passwordField.type = 'password';
+        passwordIcon.classList.remove('fa-eye-slash');
+        passwordIcon.classList.add('fa-eye');
+    }
+});
+</script>
+{% endblock %}
