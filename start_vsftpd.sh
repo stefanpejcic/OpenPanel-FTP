@@ -3,19 +3,6 @@
 #Remove all ftp users
 grep '/ftp/' /etc/passwd | cut -d':' -f1 | xargs -r -n1 deluser
 
-#Create users
-#USERS='name1|password1|[folder1][|uid1][|gid1] name2|password2|[folder2][|uid2][|gid2]'
-#may be:
-# user|password foo|bar|/home/foo
-#OR
-# user|password|/home/user/dir|10000
-#OR
-# user|password|/home/user/dir|10000|10000
-#OR
-# user|password||10000|82
-
-#no default user
-
 # Function to determine if a hostname is a FQDN
 is_fqdn() {
   if [[ $1 =~ ^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$ ]]; then
@@ -36,10 +23,12 @@ create_users() {
 
   for USER_LIST_FILE in $USER_LIST_FILES; do
     BASE_DIR=$(dirname "$USER_LIST_FILE")
-    while IFS='|' read -r NAME PASS FOLDER UID GID; do
+    OWNER=$(basename "$BASE_DIR")
+    while IFS='|' read -r NAME PASS FOLDER UID GID QUOTA_SOFT QUOTA_HARD; do
       [ -z "$NAME" ] && continue  # Skip empty lines
 
-      GROUP=$NAME
+      # All sub-users are in the OpenPanel user's group
+      GROUP=$OWNER
 
       if [ -z "$FOLDER" ]; then
         FOLDER="/ftp/$NAME"
@@ -51,24 +40,15 @@ create_users() {
         continue
       fi
 
-      if [ ! -z "$UID" ]; then
-        UID_OPT="-u $UID"
-        if [ -z "$GID" ]; then
-          GID=$UID
-        fi
-        GROUP=$(getent group $GID | cut -d: -f1)
-        if [ ! -z "$GROUP" ]; then
-          GROUP_OPT="-G $GROUP"
-        elif [ ! -z "$GID" ]; then
-          addgroup -g $GID $NAME
-          GROUP_OPT="-G $NAME"
-        fi
+      # Always use the OpenPanel user's group
+      if ! getent group "$GROUP" > /dev/null; then
+        addgroup "$GROUP"
       fi
 
-      echo -e "$PASS\n$PASS" | adduser -h $FOLDER -s /sbin/nologin $UID_OPT $GROUP_OPT $NAME
-      mkdir -p $FOLDER
-      chown $NAME:$GROUP $FOLDER
-      unset NAME PASS FOLDER UID GID GROUP UID_OPT GROUP_OPT
+      echo -e "$PASS\n$PASS" | adduser -h "$FOLDER" -s /sbin/nologin "$NAME" -G "$GROUP"
+      mkdir -p "$FOLDER"
+      chown "$NAME":"$GROUP" "$FOLDER"
+      unset NAME PASS FOLDER UID GID GROUP QUOTA_SOFT QUOTA_HARD
     done < "$USER_LIST_FILE"
   done
 }
@@ -108,7 +88,7 @@ fi
 if [ ! -z "$1" ]; then
   exec "$@"
 else
-  vsftpd -opasv_min_port=$MIN_PORT -opasv_max_port=$MAX_PORT $ADDR_OPT $TLS_OPT /etc/vsftpd/vsftpd.conf
+  vsftpd -opasv_min_port="$MIN_PORT" -opasv_max_port="$MAX_PORT" "$ADDR_OPT" "$TLS_OPT" /etc/vsftpd/vsftpd.conf
   [ -d /var/run/vsftpd ] || mkdir /var/run/vsftpd
   pgrep vsftpd | tail -n 1 > /var/run/vsftpd/vsftpd.pid
   exec pidproxy /var/run/vsftpd/vsftpd.pid true

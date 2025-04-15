@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+
+{% block title %}FTP Accounts{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <h1>FTP Accounts</h1>
+
+    <div class="card mb-4">
+        <div class="card-header bg-primary text-white">
+            <h5 class="card-title mb-0">Account Usage</h5>
+        </div>
+        <div class="card-body">
+            <p>You are using {{ current_count }} of {{ account_limit }} allowed FTP accounts.</p>
+            <div class="progress">
+                <div class="progress-bar" role="progressbar" style="width: {{ (current_count / account_limit) * 100 }}%"
+                     aria-valuenow="{{ current_count }}" aria-valuemin="0" aria-valuemax="{{ account_limit }}"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h3>Your FTP Accounts</h3>
+        {% if can_create %}
+        <a href="/ftp/create" class="btn btn-primary">
+            <i class="fas fa-plus"></i> Create New FTP Account
+        </a>
+        {% else %}
+        <button disabled class="btn btn-secondary" title="Account limit reached">
+            <i class="fas fa-plus"></i> Create New FTP Account
+        </button>
+        {% endif %}
+    </div>
+
+    {% if accounts %}
+    <div class="table-responsive">
+        <table class="table table-striped table-hover">
+            <thead>
+                <tr>
+                    <th>Username</th>
+                    <th>Directory</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for account in accounts %}
+                <tr>
+                    <td>{{ account.username }}</td>
+                    <td>{{ account.directory }}</td>
+                    <td>
+                        <div class="btn-group" role="group">
+                            <a href="/ftp/edit/{{ account.username }}" class="btn btn-sm btn-primary">
+                                <i class="fas fa-edit"></i> Edit
+                            </a>
+                            <button type="button" class="btn btn-sm btn-danger" data-toggle="modal"
+                                    data-target="#deleteModal{{ loop.index }}">
+                                <i class="fas fa-trash"></i> Delete
+                            </button>
+                        </div>
+
+                        <!-- Delete Confirmation Modal -->
+                        <div class="modal fade" id="deleteModal{{ loop.index }}" tabindex="-1" role="dialog"
+                             aria-labelledby="deleteModalLabel{{ loop.index }}" aria-hidden="true">
+                            <div class="modal-dialog" role="document">
+                                <div class="modal-content">
+                                    <div class="modal-header">
+                                        <h5 class="modal-title" id="deleteModalLabel{{ loop.index }}">Confirm Delete</h5>
+                                        <button type="button" class="close" data-dismiss="modal" aria-label="Close">
+                                            <span aria-hidden="true">&times;</span>
+                                        </button>
+                                    </div>
+                                    <div class="modal-body">
+                                        Are you sure you want to delete the FTP account <strong>{{ account.username }}</strong>?
+                                        This action cannot be undone.
+                                    </div>
+                                    <div class="modal-footer">
+                                        <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                                        <form action="/ftp/delete/{{ account.username }}" method="POST">
+                                            <button type="submit" class="btn btn-danger">Delete</button>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="alert alert-info">
+        <i class="fas fa-info-circle"></i> You don't have any FTP accounts yet.
+        {% if can_create %}
+        <a href="/ftp/create" class="alert-link">Create your first FTP account</a>.
+        {% endif %}
+    </div>
+    {% endif %}
+
+    <div class="card mt-4">
+        <div class="card-header bg-info text-white">
+            <h5 class="card-title mb-0">Connection Information</h5>
+        </div>
+        <div class="card-body">
+            <p><strong>FTP Hostname:</strong> {{ request.host.split(':')[0] }}</p>
+            <p><strong>FTP Port:</strong> 21</p>
+            <p><strong>Protocol:</strong> FTP{% if ssl_enabled %} with TLS/SSL (recommended){% endif %}</p>
+        </div>
+    </div>
+</div>
+{% endblock %}

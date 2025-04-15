@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+
+{% block title %}Create FTP Account{% endblock %}
+
+{% block content %}
+<div class="container mt-4">
+    <div class="card">
+        <div class="card-header bg-primary text-white">
+            <h2 class="card-title mb-0">Create FTP Account</h2>
+        </div>
+        <div class="card-body">
+            {% if not can_create %}
+            <div class="alert alert-warning">
+                <i class="fas fa-exclamation-triangle"></i> You have reached your maximum allowed FTP accounts.
+                <a href="/ftp" class="alert-link">Return to the FTP dashboard</a>.
+            </div>
+            {% else %}
+            <form method="POST" action="/ftp/create">
+                <div class="form-group">
+                    <label for="ftp_username">Username <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="ftp_username" name="ftp_username"
+                           required placeholder="Enter FTP username">
+                    <small class="form-text text-muted">Username for FTP login</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="password">Password <span class="text-danger">*</span></label>
+                    <div class="input-group">
+                        <input type="password" class="form-control" id="password" name="password"
+                               required placeholder="Enter password">
+                        <div class="input-group-append">
+                            <button class="btn btn-outline-secondary" type="button" id="toggle-password">
+                                <i class="fas fa-eye"></i>
+                            </button>
+                        </div>
+                    </div>
+                    <small class="form-text text-muted">Password for FTP login</small>
+                </div>
+
+                <div class="form-group">
+                    <label for="folder">Directory <span class="text-danger">*</span></label>
+                    <input type="text" class="form-control" id="folder" name="folder"
+                           required placeholder="Enter directory path" value="{{ home_dir }}">
+                    <small class="form-text text-muted">Directory must be inside your home directory</small>
+                </div>
+
+                <div class="form-group mt-4">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save"></i> Create FTP Account
+                    </button>
+                    <a href="/ftp" class="btn btn-secondary ml-2">
+                        <i class="fas fa-times"></i> Cancel
+                    </a>
+                </div>
+            </form>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+<script>
+document.getElementById('toggle-password').addEventListener('click', function() {
+    var passwordField = document.getElementById('password');
+    var passwordIcon = this.querySelector('i');
+
+    if (passwordField.type === 'password') {
+        passwordField.type = 'text';
+        passwordIcon.classList.remove('fa-eye');
+        passwordIcon.classList.add('fa-eye-slash');
+    } else {
+        passwordField.type = 'password';
+        passwordIcon.classList.remove('fa-eye-slash');
+        passwordIcon.classList.add('fa-eye');
+    }
+});
+</script>
+{% endblock %}
