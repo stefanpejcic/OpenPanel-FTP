@@ -14,23 +14,26 @@ Small and flexible docker image with vsftpd server + OpenPanel module to allow u
 ### Usage
 
 This image can be used in two ways:
+
 - as an FTP module for OpenPanel
 - as a standalone FTP server
-
 
 #### OpenPanel Module
 
 To install FTP on OpenPanel server run the following command:
+
 ```bash
 opencli ftp-setup
 ```
 
 To create new FTP accounts:
+
 ```bash
 opencli ftp-add <NEW_USERNAME> <NEW_PASSWORD> <FOLDER> <OPENPANEL_USERNAME> [QUOTA_SOFT_MB] [QUOTA_HARD_MB]
 ```
 
 To create a new FTP group:
+
 ```bash
 opencli ftp-group-add <GROUP_NAME> [GID] [MEMBER_LIST_COMMA_SEPARATED]
 ```
@@ -45,10 +48,10 @@ The FTP module provides a complete web interface for managing FTP accounts:
 - Delete accounts
 - Manage FTP groups (admin interface)
 
-
 #### Standalone Docker
 
 Installation:
+
 ```
 docker run -d \
     -p "21:21" \
