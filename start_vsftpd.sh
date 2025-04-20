@@ -1,145 +1,185 @@
-#!/bin/bash -e
-
-# Use set -euo pipefail for better error handling
+#!/bin/bash
 set -euo pipefail
 
-#Remove all ftp users
-grep '/ftp/' /etc/passwd | cut -d':' -f1 | xargs -r -n1 deluser
+# Constants
+readonly CONFIG_FILE="/etc/vsftpd/vsftpd.conf"
+readonly VSFTPD_BIN="/usr/sbin/vsftpd"
+readonly MIN_PORT=30000
+readonly MAX_PORT=31000
 
-# Function to determine if a hostname is a FQDN
-is_fqdn() {
-	if echo "$1" | grep -E '^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$' >/dev/null; then
-		return 0
-	else
-		return 1
-	fi
+# Performance optimizations
+ulimit -n 65535  # Increase open file limit
+ulimit -s 8192   # Optimize stack size
+
+log() {
+    printf '[%s] %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${1-}" >&2
 }
 
-# Function to get the server's IP address
-get_ip_address() {
-	hostname -I | awk '{print $1}'
+fail() {
+    log "ERROR: ${1-}"
+    exit "${2-1}"
 }
 
-# Function to read users from users.list files and create them
-create_users() {
-	USER_LIST_FILES=$(find /etc/openpanel/ftp/users/ -name 'users.list')
-
-<<<<<<< Updated upstream
-  for USER_LIST_FILE in $USER_LIST_FILES; do
-    BASE_DIR=$(dirname "$USER_LIST_FILE")
-    OWNER=$(basename "$BASE_DIR")
-    while IFS='|' read -r NAME PASS FOLDER UID GID QUOTA_SOFT QUOTA_HARD; do
-      [ -z "$NAME" ] && continue  # Skip empty lines
-
-      # All sub-users are in the OpenPanel user's group
-      GROUP=$OWNER
-=======
-	for USER_LIST_FILE in ${USER_LIST_FILES}; do
-		BASE_DIR=$(dirname "${USER_LIST_FILE}")
-		while IFS='|' read -r NAME PASS FOLDER UID GID; do
-			[[ -z ${NAME} ]] && continue # Skip empty lines
-
-			GROUP=${NAME}
->>>>>>> Stashed changes
-
-			if [[ -z ${FOLDER} ]]; then
-				FOLDER="/ftp/${NAME}"
-			fi
-
-			# Ensure the folder starts with /home and matches the base directory where users.list is found
-			if [[ -z "$(echo "${FOLDER}" | grep -E "^/home/")" ]] || [[ -z "$(echo "${FOLDER}" | grep -E "^${BASE_DIR}")" ]]; then
-				echo "Skipping user ${NAME}: folder ${FOLDER} does not match base directory ${BASE_DIR} or does not start with /home"
-				continue
-			fi
-
-<<<<<<< Updated upstream
-      # Always use the OpenPanel user's group
-      if ! getent group "$GROUP" > /dev/null; then
-        addgroup "$GROUP"
-      fi
-
-      echo -e "$PASS\n$PASS" | adduser -h "$FOLDER" -s /sbin/nologin "$NAME" -G "$GROUP"
-      mkdir -p "$FOLDER"
-      chown "$NAME":"$GROUP" "$FOLDER"
-      unset NAME PASS FOLDER UID GID GROUP QUOTA_SOFT QUOTA_HARD
-    done < "$USER_LIST_FILE"
-  done
-=======
-			if [[ -n ${UID} ]]; then
-				UID_OPT="-u ${UID}"
-				if [[ -z ${GID} ]]; then
-					GID=${UID}
-				fi
-				GROUP=$(getent group "${GID}" | cut -d: -f1)
-				if [[ -n ${GROUP} ]]; then
-					GROUP_OPT="-G ${GROUP}"
-				elif [[ -n ${GID} ]]; then
-					addgroup -g "${GID}" "${NAME}"
-					GROUP_OPT="-G ${NAME}"
-				fi
-			fi
-
-			echo -e "${PASS}\n${PASS}" | adduser -h "${FOLDER}" -s /sbin/nologin "${UID_OPT}" "${GROUP_OPT}" "${NAME}"
-			mkdir -p "${FOLDER}"
-			chown "${NAME}":"${GROUP}" "${FOLDER}"
-			unset NAME PASS FOLDER UID GID GROUP UID_OPT GROUP_OPT
-		done <"${USER_LIST_FILE}"
-	done
->>>>>>> Stashed changes
+validate_file() {
+    local file="${1-}"
+    [[ -f "${file}" ]] || fail "File not found: ${file}"
+    [[ -r "${file}" ]] || fail "File not readable: ${file}"
 }
 
-# Call the function to create users
-create_users
+setup_tls() {
+    local cert="${1-}" key="${2-}"
+    validate_file "${cert}"
+    validate_file "${key}"
 
-# Set default passive mode port range if not specified
-if [[ -z ${MIN_PORT} ]]; then
-	MIN_PORT=21000
-fi
+    printf '%s ' \
+        "-orsa_cert_file=${cert}" \
+        "-orsa_private_key_file=${key}" \
+        "-ossl_enable=YES" \
+        "-oforce_local_data_ssl=YES" \
+        "-oforce_local_logins_ssl=YES" \
+        "-ossl_ciphers=HIGH"
+}
 
-if [[ -z ${MAX_PORT} ]]; then
-	MAX_PORT=21010
-fi
+# Ensure necessary directories exist
+mkdir -p /etc/vsftpd || true
+mkdir -p /var/log/vsftpd || true
+mkdir -p /etc/openpanel/ftp/users || true
+touch /var/log/vsftpd/vsftpd.log || true
+chmod 644 /var/log/vsftpd/vsftpd.log || true
 
-# Determine the address if not provided
-if [[ -z ${ADDRESS} ]]; then
-	HOSTNAME=$(hostname)
-	if is_fqdn "${HOSTNAME}"; then
-		ADDRESS="${HOSTNAME}"
-	else
-		ADDRESS=$(get_ip_address)
-	fi
-fi
+generate_user_config() {
+    local owner="$1"
+    local username="$2"
+    local directory="$3"
+    local user_config_dir="/etc/vsftpd/users_config/${owner}"
+    local user_config_file="${user_config_dir}/${username}"
 
-# Configure address and TLS options
-if [[ -n ${ADDRESS} ]]; then
-	ADDR_OPT="-opasv_address=${ADDRESS}"
-else
-<<<<<<< Updated upstream
-  vsftpd -opasv_min_port="$MIN_PORT" -opasv_max_port="$MAX_PORT" "$ADDR_OPT" "$TLS_OPT" /etc/vsftpd/vsftpd.conf
-  [ -d /var/run/vsftpd ] || mkdir /var/run/vsftpd
-  pgrep vsftpd | tail -n 1 > /var/run/vsftpd/vsftpd.pid
-  exec pidproxy /var/run/vsftpd/vsftpd.pid true
-=======
-	ADDR_OPT=""
->>>>>>> Stashed changes
-fi
+    mkdir -p "${user_config_dir}"
 
-# Initialize TLS_OPT variable
-TLS_OPT=""
-if [[ -n ${TLS_CERT} ]] || [[ -n ${TLS_KEY} ]]; then
-	# Define TLS options as a space-separated string
-	TLS_OPT="-orsa_cert_file=${TLS_CERT} -orsa_private_key_file=${TLS_KEY} -ossl_enable=YES -oallow_anon_ssl=NO -oforce_local_data_ssl=YES -oforce_local_logins_ssl=YES -ossl_tlsv1=NO -ossl_sslv2=NO -ossl_sslv3=NO -ossl_ciphers=HIGH"
-fi
+    cat << EOF > "${user_config_file}"
+local_root=${directory}
+write_enable=YES
+chroot_local_user=YES
+allow_writeable_chroot=YES
+EOF
 
-# Check if vsftpd config file exists
-if [[ ! -f /etc/vsftpd.conf ]]; then
-	echo "Config file not found" >&2
-	exit 1
-fi
+    echo "Generated config for ${username} (${owner}) at ${user_config_file}"
+}
 
-# Set resource limits (before running vsftpd)
-echo "ulimit -n 1024" >>/etc/profile.d/resource-limits.sh
+update_vsftpd_db() {
+    echo "Updating vsftpd user database..."
+    local db_file="/etc/vsftpd/virtual_users.db"
+    local txt_file="/etc/vsftpd/virtual_users.txt"
 
-# Run vsftpd with the config file (using exec as the final command)
-exec vsftpd "${ADDR_OPT-}" "${TLS_OPT-}" /etc/vsftpd.conf
-# Note: The HEALTHCHECK line is a Docker instruction and should be in the Dockerfile, not here
+    true > "${txt_file}"
+    rm -f "${db_file}"
+
+    if [[ -d "/etc/openpanel/ftp/users" ]]; then
+        find "/etc/openpanel/ftp/users" -mindepth 1 -maxdepth 1 -type d | while read -r user_dir; do
+            local owner
+            owner=$(basename "${user_dir}")
+            local user_list="${user_dir}/users.list"
+
+            if [[ -f "${user_list}" ]]; then
+                while IFS='|' read -r username password_hash directory || [[ -n "${username}" ]]; do
+                    if [[ -n "${username}" ]] && [[ -n "${password_hash}" ]]; then
+                        echo "Processing FTP user: ${username} for owner: ${owner}"
+                        echo "${username}" >> "${txt_file}"
+                        echo "${password_hash}" >> "${txt_file}"
+
+                        local ftp_dir="${directory:-/ftp/${username}}"
+                        generate_user_config "${owner}" "${username}" "${ftp_dir}"
+                    else
+                        echo "Skipping invalid line in ${user_list}"
+                    fi
+                done < "${user_list}"
+            fi
+        done
+    fi
+
+    if [[ -s "${txt_file}" ]]; then
+        db_load -T -t hash -f "${txt_file}" "${db_file}"
+        chmod 600 "${txt_file}" "${db_file}"
+        echo "vsftpd user database updated successfully."
+    else
+        echo "No users found to update the database."
+        touch "${db_file}"
+        chmod 600 "${db_file}"
+    fi
+}
+
+update_vsftpd_db
+
+main() {
+    command -v "${VSFTPD_BIN}" >/dev/null 2>&1 || fail "vsftpd not found"
+    validate_file "${CONFIG_FILE}"
+
+    local tls_opts=""
+    if [[ -n "${TLS_CERT-}" ]] && [[ -n "${TLS_KEY-}" ]]; then
+        tls_opts=$(setup_tls "${TLS_CERT}" "${TLS_KEY}") || fail "TLS setup failed"
+    fi
+
+    local port_opts="-opasv_min_port=${MIN_PORT} -opasv_max_port=${MAX_PORT}"
+
+    true > "${CONFIG_FILE}"
+
+    cat << EOF >> "${CONFIG_FILE}"
+listen=YES
+listen_ipv6=NO
+
+anonymous_enable=NO
+local_enable=YES
+write_enable=YES
+dirmessage_enable=YES
+use_localtime=YES
+xferlog_enable=YES
+connect_from_port_20=YES
+
+xferlog_file=/var/log/vsftpd/vsftpd.log
+xferlog_std_format=YES
+log_ftp_protocol=YES
+
+seccomp_sandbox=NO
+
+pam_service_name=vsftpd
+guest_enable=YES
+guest_username=vsftpd
+virtual_use_local_privs=YES
+user_config_dir=/etc/vsftpd/users_config
+
+ls_recurse_enable=YES
+
+pasv_enable=YES
+EOF
+
+    if [[ -n "${PASV_ADDRESS:-}" ]]; then
+        echo "pasv_address=${PASV_ADDRESS}" >> "${CONFIG_FILE}"
+    fi
+
+    if [[ -n "${PASV_MIN_PORT:-}" ]] && [[ -n "${PASV_MAX_PORT:-}" ]]; then
+        echo "pasv_min_port=${PASV_MIN_PORT}" >> "${CONFIG_FILE}"
+        echo "pasv_max_port=${PASV_MAX_PORT}" >> "${CONFIG_FILE}"
+    fi
+
+    if [[ -n "${SSL_ENABLE:-}" ]] && [[ "${SSL_ENABLE}" = "YES" ]]; then
+        echo "ssl_enable=YES" >> "${CONFIG_FILE}"
+        echo "allow_anon_ssl=NO" >> "${CONFIG_FILE}"
+        echo "force_local_data_ssl=YES" >> "${CONFIG_FILE}"
+        echo "force_local_logins_ssl=YES" >> "${CONFIG_FILE}"
+        echo "ssl_tlsv1=YES" >> "${CONFIG_FILE}"
+        echo "ssl_sslv2=NO" >> "${CONFIG_FILE}"
+        echo "ssl_sslv3=NO" >> "${CONFIG_FILE}"
+        echo "require_ssl_reuse=NO" >> "${CONFIG_FILE}"
+        echo "ssl_ciphers=HIGH" >> "${CONFIG_FILE}"
+        if [[ -f "/etc/vsftpd/certs/vsftpd.pem" ]]; then
+            echo "rsa_cert_file=/etc/vsftpd/certs/vsftpd.pem" >> "${CONFIG_FILE}"
+        else
+            echo "Warning: SSL enabled but certificate file /etc/vsftpd/certs/vsftpd.pem not found." >&2
+        fi
+    fi
+
+    log "Starting vsftpd..."
+    exec "${VSFTPD_BIN}" "${tls_opts}" "${port_opts}" "${CONFIG_FILE}"
+}
+
+main "$@"

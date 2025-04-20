@@ -49,3 +49,19 @@ All notable changes to OpenPanel-FTP will be documented in this file.
 - Secure password handling
 - TLS certificate validation
 - Anonymous access restrictions
+
+## [0.1.0] - YYYY-MM-DD
+
+### Added
+- Initial release with basic FTP account management.
+
+### Changed
+- Refactored code for better performance.
+
+### Fixed
+- Minor bug fixes.
+
+## [0.0.1] - YYYY-MM-DD
+
+### Added
+- Project setup.

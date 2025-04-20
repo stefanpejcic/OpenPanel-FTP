@@ -1,77 +1,145 @@
 {% extends "base.html" %}
-
 {% block title %}Create FTP Account{% endblock %}
-
 {% block content %}
 <div class="container mt-4">
-    <div class="card">
-        <div class="card-header bg-primary text-white">
-            <h2 class="card-title mb-0">Create FTP Account</h2>
-        </div>
-        <div class="card-body">
-            {% if not can_create %}
-            <div class="alert alert-warning">
-                <i class="fas fa-exclamation-triangle"></i> You have reached your maximum allowed FTP accounts.
-                <a href="/ftp" class="alert-link">Return to the FTP dashboard</a>.
-            </div>
-            {% else %}
-            <form method="POST" action="/ftp/create">
-                <div class="form-group">
-                    <label for="ftp_username">Username <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control" id="ftp_username" name="ftp_username"
-                           required placeholder="Enter FTP username">
-                    <small class="form-text text-muted">Username for FTP login</small>
-                </div>
-
-                <div class="form-group">
-                    <label for="password">Password <span class="text-danger">*</span></label>
-                    <div class="input-group">
-                        <input type="password" class="form-control" id="password" name="password"
-                               required placeholder="Enter password">
-                        <div class="input-group-append">
-                            <button class="btn btn-outline-secondary" type="button" id="toggle-password">
-                                <i class="fas fa-eye"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <small class="form-text text-muted">Password for FTP login</small>
-                </div>
-
-                <div class="form-group">
-                    <label for="folder">Directory <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control" id="folder" name="folder"
-                           required placeholder="Enter directory path" value="{{ home_dir }}">
-                    <small class="form-text text-muted">Directory must be inside your home directory</small>
-                </div>
-
-                <div class="form-group mt-4">
-                    <button type="submit" class="btn btn-primary">
-                        <i class="fas fa-save"></i> Create FTP Account
-                    </button>
-                    <a href="/ftp" class="btn btn-secondary ml-2">
-                        <i class="fas fa-times"></i> Cancel
-                    </a>
-                </div>
-            </form>
-            {% endif %}
-        </div>
+  <div class="card">
+    <div class="card-header bg-primary text-white">
+      <h2 class="card-title mb-0">Create FTP Account</h2>
     </div>
+    <div class="card-body">
+      {% if not can_create %}
+      <div class="alert alert-warning">
+        <i class="fas fa-exclamation-triangle"></i> You have reached your
+        maximum allowed FTP accounts.
+        <a href="/ftp" class="alert-link">Return to the FTP dashboard</a>.
+      </div>
+      {% else %}
+      <form method="POST" action="/ftp/create" id="createForm" novalidate>
+        <div class="form-group">
+          <label for="ftp_username"
+            >Username <span class="text-danger">*</span></label
+          >
+          <input
+            type="text"
+            class="form-control"
+            id="ftp_username"
+            name="ftp_username"
+            required
+            pattern="^[a-zA-Z0-9_-]+$"
+            minlength="3"
+            maxlength="32"
+            title="Username can only contain letters, numbers, underscore and dash"
+            placeholder="Enter FTP username"
+          />
+          <div class="invalid-feedback">
+            Please enter a valid username (3-32 characters, alphanumeric, _ and
+            -)
+          </div>
+          <small class="form-text text-muted">Username for FTP login</small>
+        </div>
+
+        <div class="form-group">
+          <label for="password"
+            >Password <span class="text-danger">*</span></label
+          >
+          <div class="input-group">
+            <input
+              type="password"
+              class="form-control"
+              id="password"
+              name="password"
+              required
+              minlength="8"
+              placeholder="Enter password"
+              pattern="^(?=.*[A-Za-z])(?=.*\d)[A-Za-z\d@$!%*#?&]{8,}$"
+              title="Password must be at least 8 characters and include letters and numbers"
+            />
+            <div class="input-group-append">
+              <button
+                class="btn btn-outline-secondary"
+                type="button"
+                id="toggle-password"
+              >
+                <i class="fas fa-eye"></i>
+              </button>
+            </div>
+            <div class="invalid-feedback">
+              Password must be at least 8 characters with letters and numbers
+            </div>
+          </div>
+          <small class="form-text text-muted">Password for FTP login</small>
+        </div>
+
+        <div class="form-group">
+          <label for="folder"
+            >Directory <span class="text-danger">*</span></label
+          >
+          <input
+            type="text"
+            class="form-control"
+            id="folder"
+            name="folder"
+            required
+            pattern="^/home/.*"
+            value="{{ home_dir }}"
+            title="Directory must be inside your home directory"
+            placeholder="Enter directory path"
+          />
+          <div class="invalid-feedback">
+            Directory must be inside your home directory
+          </div>
+          <small class="form-text text-muted"
+            >Directory must be inside your home directory</small
+          >
+        </div>
+
+        <div class="form-group mt-4">
+          <button type="submit" class="btn btn-primary">
+            <i class="fas fa-save"></i> Create FTP Account
+          </button>
+          <a href="/ftp" class="btn btn-secondary ml-2">
+            <i class="fas fa-times"></i> Cancel
+          </a>
+        </div>
+      </form>
+      {% endif %}
+    </div>
+  </div>
 </div>
+{% endblock %}
 
-<script>
-document.getElementById('toggle-password').addEventListener('click', function() {
-    var passwordField = document.getElementById('password');
-    var passwordIcon = this.querySelector('i');
+{% block scripts %}
+<script defer>
+document.addEventListener('DOMContentLoaded', () => {
+  const form = document.getElementById('createForm');
+  const toggleBtn = document.getElementById('toggle-password');
+  const pwdField = document.getElementById('password');
 
-    if (passwordField.type === 'password') {
-        passwordField.type = 'text';
-        passwordIcon.classList.remove('fa-eye');
-        passwordIcon.classList.add('fa-eye-slash');
-    } else {
-        passwordField.type = 'password';
-        passwordIcon.classList.remove('fa-eye-slash');
-        passwordIcon.classList.add('fa-eye');
+  // Optimize password toggle
+  toggleBtn?.addEventListener('click', () => {
+    const isPassword = pwdField.type === 'password';
+    pwdField.type = isPassword ? 'text' : 'password';
+    toggleBtn.querySelector('i').classList.toggle('fa-eye');
+    toggleBtn.querySelector('i').classList.toggle('fa-eye-slash');
+  });
+
+  // Client-side validation
+  form?.addEventListener('submit', (e) => {
+    if (!form.checkValidity()) {
+      e.preventDefault();
+      e.stopPropagation();
     }
+    form.classList.add('was-validated');
+  });
+
+  // Real-time validation feedback
+  const inputs = form?.querySelectorAll('input[required]');
+  inputs?.forEach(input => {
+    input.addEventListener('input', () => {
+      input.classList.toggle('is-valid', input.checkValidity());
+      input.classList.toggle('is-invalid', !input.checkValidity());
+    });
+  });
 });
 </script>
 {% endblock %}

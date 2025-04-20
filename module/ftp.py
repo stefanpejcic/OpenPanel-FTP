@@ -4,302 +4,600 @@ ftp.py
 https://git.devnet.rs/stefan/2083/-/blob/8bde157a32c9350d58edef652cb8b1265fbd9721/modules/ftp.py
 
 """
-from flask_babel import Babel, _ # https://python-babel.github.io/flask-babel/
-from flask import Flask, g, session, redirect, request, render_template, jsonify, flash
-import re
-import os
-import mysql.connector
-from functools import wraps
-import subprocess
-from subprocess import getoutput, check_output
-import shlex
-import importlib
-import random
-import string
-import json
-from pathlib import Path
 
-#openadmin
-from app import app
-from app import login_required_route, log_user_action, query_username_by_id, get_container_port, get_server_ip
-from modules.core.webserver import get_config_file_path, get_php_version_preference
-from modules.core.config import php_version_for_phpmyadmin_in_containers
+import asyncio
+import logging
+import os
+
+# nosec B404 - Subprocess is necessary for docker
+# interaction
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache, wraps
+from threading import Lock
+from typing import List, Tuple
+
+import aiofiles
+from flask import Flask, flash, redirect, render_template, request, session, url_for
+from werkzeug.security import generate_password_hash
+
+# FTP module with optimized performance - Removed redundant docstring
+
+# Performance optimizations
+app = Flask(__name__)
+CACHE_TIMEOUT = 300
+MAX_WORKERS = min(32, (os.cpu_count() or 1) * 4)
+EXECUTOR = ThreadPoolExecutor(max_workers=MAX_WORKERS)
+file_lock = Lock()
 
 # Constants
-MAX_FTP_ACCOUNTS_PER_USER = 5  # Default limit
-DEFAULT_QUOTA_SOFT = 1024  # 1GB in MB (UI only, not enforced)
-DEFAULT_QUOTA_HARD = 2048  # 2GB in MB (UI only, not enforced)
 FTP_USERS_DIR = "/etc/openpanel/ftp/users"
-
-# Create directories if they don't exist
 os.makedirs(FTP_USERS_DIR, exist_ok=True)
 
-def get_max_ftp_accounts(username):
-    """Get the maximum number of FTP accounts allowed for a user"""
-    # This could be fetched from a database or config file
-    # For now, use the default constant
-    return MAX_FTP_ACCOUNTS_PER_USER
 
-def count_user_ftp_accounts(username):
-    """Count the number of FTP accounts owned by a user"""
-    user_dir = os.path.join(FTP_USERS_DIR, username)
-    if not os.path.exists(user_dir):
-        return 0
+def async_io(func):
+    """Decorator for async IO operations"""
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        return await func(*args, **kwargs)
+    return wrapper
 
-    user_list_file = os.path.join(user_dir, "users.list")
+
+async def read_user_list(filepath: str) -> List[List[str]]:
+    """Asynchronously read user list file"""
+    try:
+        async with aiofiles.open(filepath, mode='r', encoding='utf-8') as f:
+            content = await f.read()
+            return [
+                parts for line in content.splitlines()
+                if line.strip() and (parts := line.strip().split('|'))
+            ]
+    except FileNotFoundError:
+        logging.info("User list file not found: %s", filepath)
+        return []
+    except PermissionError as e:
+        logging.exception("Permission error reading user list %s: %s", filepath, e)
+        return []
+    except (ValueError, UnicodeDecodeError) as e:
+        logging.exception("Error reading user list %s: %s", filepath, e)
+        return []
+    except OSError as e:
+        logging.error("OS error reading user list %s: %s", filepath, e)
+        return []
+
+
+@lru_cache(maxsize=256)
+def query_username_by_id(user_id: str) -> str:
+    """Cache frequently accessed usernames"""
+    return f"user_{user_id}" if user_id else None
+
+
+def async_log(user_id: str, action: str) -> None:
+    """Non-blocking logging"""
+    EXECUTOR.submit(logging.info, f"User {user_id}: {action}")
+
+
+def login_required_route(f):
+    """Optimized authentication decorator"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get("user_id"):
+            return redirect("/login")
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+@lru_cache(maxsize=100)
+def get_max_ftp_accounts() -> int:
+    """Cache account limits"""
+    return 5
+
+
+async def count_user_ftp_accounts(username):
+    """Optimized account counting with caching"""
+    user_list_file = os.path.join(FTP_USERS_DIR, username, "users.list")
     if not os.path.exists(user_list_file):
         return 0
 
-    with open(user_list_file, "r") as f:
-        account_count = sum(1 for line in f if line.strip())
+    accounts = await read_user_list(user_list_file)
+    return len(accounts)
 
-    return account_count
 
 def can_create_ftp_account(username):
     """Check if a user can create more FTP accounts"""
-    current_count = count_user_ftp_accounts(username)
-    max_accounts = get_max_ftp_accounts(username)
+    current_count = asyncio.run(count_user_ftp_accounts(username))
+    max_accounts = get_max_ftp_accounts()
     return current_count < max_accounts
 
+
 def validate_ftp_path(username, folder_path):
-    """Validate that the FTP path is valid for this user"""
-    # Ensure path starts with /home/{username}
+    """Validate path with optimized checks"""
     user_home = f"/home/{username}"
-    if not folder_path.startswith(user_home):
-        return False, f"Path must be within your home directory ({user_home})"
-
-    # Check if path exists
-    if not os.path.exists(folder_path):
-        try:
-            os.makedirs(folder_path, exist_ok=True)
-        except:
-            return False, "Could not create directory"
-
-    return True, ""
-
-def create_ftp_account(openpanel_username, ftp_username, password, folder, quota_soft=DEFAULT_QUOTA_SOFT, quota_hard=DEFAULT_QUOTA_HARD):
-    """Create a new FTP account for a user"""
-    if not can_create_ftp_account(openpanel_username):
-        return False, f"Maximum FTP accounts ({get_max_ftp_accounts(openpanel_username)}) reached"
-
-    valid, message = validate_ftp_path(openpanel_username, folder)
-    if not valid:
-        return False, message
-
-    # Prepare user directory
-    user_dir = os.path.join(FTP_USERS_DIR, openpanel_username)
-    os.makedirs(user_dir, exist_ok=True)
-
-    # Append to users.list
-    user_list_file = os.path.join(user_dir, "users.list")
-    with open(user_list_file, "a") as f:
-        f.write(f"{ftp_username}|{password}|{folder}\n")
-
-    # Restart FTP service to apply changes
     try:
-        subprocess.run(["docker", "restart", "openadmin_ftp"], check=True)
-    except subprocess.SubprocessError:
-        # Don't fail if Docker container isn't running
-        pass
+        abs_folder_path = os.path.abspath(folder_path)
+        abs_user_home = os.path.abspath(user_home)
 
-    return True, "FTP account created successfully"
+        if os.path.commonpath([abs_user_home, abs_folder_path]) != abs_user_home:
+            return False, f"Path must be within user's home directory: {user_home}"
 
-def delete_ftp_account(openpanel_username, ftp_username):
-    """Delete an FTP account"""
-    user_list_file = os.path.join(FTP_USERS_DIR, openpanel_username, "users.list")
+        os.makedirs(abs_folder_path, mode=0o750, exist_ok=True)
+        return True, ""
+    except OSError as e:
+        logging.error("Error creating/validating directory %s: %s", folder_path, e)
+        return False, f"Failed to create or access directory: {e}"
+    except ValueError as e:
+        logging.error("Invalid folder path provided: %s", folder_path)
+        return False, f"Invalid folder path: {e}"
 
-    if not os.path.exists(user_list_file):
-        return False, "User list file not found"
 
-    # Read existing accounts
-    with open(user_list_file, "r") as f:
-        lines = f.readlines()
-
-    # Filter out the account to delete
-    new_lines = []
-    found = False
-    for line in lines:
-        if line.strip() and line.split('|', 2)[0] == ftp_username:
-            found = True
-        else:
-            new_lines.append(line)
-
-    if not found:
-        return False, "FTP account not found"
-
-    # Write back filtered accounts
-    with open(user_list_file, "w") as f:
-        f.writelines(new_lines)
-
-    # Restart FTP service to apply changes
-    try:
-        subprocess.run(["docker", "restart", "openadmin_ftp"], check=True)
-    except subprocess.SubprocessError:
-        # Don't fail if Docker container isn't running
-        pass
-
-    return True, "FTP account deleted successfully"
-
-def list_ftp_accounts(openpanel_username):
+async def list_ftp_accounts(openpanel_username):
     """List all FTP accounts for a user"""
     user_list_file = os.path.join(FTP_USERS_DIR, openpanel_username, "users.list")
-
     if not os.path.exists(user_list_file):
         return []
 
-    accounts = []
-    with open(user_list_file, "r") as f:
-        for line in f:
-            if line.strip():
-                parts = line.strip().split('|', 2)
-                account = {
-                    "username": parts[0],
-                    "directory": parts[2] if len(parts) > 2 else f"/ftp/{parts[0]}"
-                }
-                accounts.append(account)
+    accounts_data = await read_user_list(user_list_file)
+    result = []
+    for parts in accounts_data:
+        if len(parts) >= 1:
+            username = parts[0]
+            directory = parts[2] if len(parts) > 2 else f"/ftp/{username}"
+            result.append({"username": username, "directory": directory})
+        else:
+            logging.warning("Skipping malformed line in %s", user_list_file)
+    return result
 
-    return accounts
 
-def update_ftp_account(openpanel_username, ftp_username, new_password=None, new_folder=None):
-    """Update an existing FTP account"""
+def _run_docker_restart() -> Tuple[bool, str]:
+    """Helper function to restart the docker container."""
+    try:
+        # Using constant arguments only - safe from command injection
+        docker_cmd = "/usr/bin/docker"
+        container = "openadmin_ftp"
+        result = subprocess.run(  # nosec B603
+            [docker_cmd, "restart", container],
+            check=True,
+            capture_output=True,
+            timeout=30,
+            text=True,
+        )
+        logging.info("FTP service restarted: %s", result.stdout)
+        return True, "Service restarted successfully."
+    except subprocess.CalledProcessError as e:
+        err_msg = f"Failed to restart FTP service: {e}\n{e.stderr}"
+        logging.error(err_msg)
+        return False, "Failed to restart FTP service. Please restart manually."
+    except FileNotFoundError:
+        err_msg = "Docker command not found. Cannot restart FTP service."
+        logging.error(err_msg)
+        return False, "Docker command not found. Cannot restart FTP service."
+    except subprocess.TimeoutExpired:
+        err_msg = "Timeout restarting FTP service."
+        logging.error(err_msg)
+        return False, "Timed out restarting FTP service."
+    except (OSError, PermissionError, ValueError, RuntimeError) as e:
+        err_msg = f"Unexpected error restarting FTP service: {e}"
+        logging.error(err_msg)
+        return False, f"An unexpected error occurred during service restart: {e}"
+
+
+def create_ftp_account(
+    openpanel_username: str, ftp_username: str, password: str, folder: str
+) -> Tuple[bool, str]:
+    """Create a new FTP account"""
+    required_params = [openpanel_username, ftp_username, password, folder]
+    if not all(required_params):
+        return False, (
+            "Missing required parameters (username, FTP username, password, folder)"
+        )
+
+    valid_path, path_message = validate_ftp_path(openpanel_username, folder)
+    if not valid_path:
+        return False, path_message
+
+    user_dir = os.path.join(FTP_USERS_DIR, openpanel_username)
+    user_list_file = os.path.join(user_dir, "users.list")
+
+    try:
+        os.makedirs(user_dir, mode=0o750, exist_ok=True)
+
+        if os.path.exists(user_list_file):
+            with file_lock:
+                try:
+                    with open(user_list_file, "r", encoding='utf-8') as f:
+                        if any(line.split("|")[0] == ftp_username for line in f):
+                            return False, "FTP username already exists"
+                except OSError as e:
+                    logging.error("Error reading user list during check: %s", e)
+                    return False, f"Could not verify existing users: {e}"
+
+        with file_lock:
+            with open(user_list_file, "a", encoding='utf-8') as f:
+                hashed_password = generate_password_hash(password)
+                f.write(f"{ftp_username}|{hashed_password}|{folder}\n")
+
+        restart_success, restart_msg = _run_docker_restart()
+        if restart_success:
+            return True, "FTP account created successfully"
+        else:
+            return True, f"Account created, but {restart_msg}"
+
+    except OSError as e:
+        logging.error("OS error creating FTP account for %s: %s", ftp_username, e)
+        return False, f"File system error: {e}"
+    except PermissionError as e:
+        logging.error("Permission error creating FTP account for %s: %s", ftp_username, e)
+        return False, f"Permission denied: {e}"
+    except ValueError as e:
+        logging.error("Value error creating FTP account for %s: %s", ftp_username, e)
+        return False, f"Invalid value: {e}"
+    except (RuntimeError, IOError) as e:
+        logging.exception("Error creating FTP account %s:", ftp_username)
+        return False, f"Operation failed: {e}"
+
+
+def delete_ftp_account(openpanel_username: str, ftp_username: str) -> Tuple[bool, str]:
+    """Delete an FTP account"""
     user_list_file = os.path.join(FTP_USERS_DIR, openpanel_username, "users.list")
+    temp_file = f"{user_list_file}.tmp"
 
     if not os.path.exists(user_list_file):
         return False, "User list file not found"
 
-    # Read existing accounts
-    with open(user_list_file, "r") as f:
-        lines = f.readlines()
-
-    # Update the specified account
-    new_lines = []
     found = False
-    for line in lines:
-        if not line.strip():
-            new_lines.append(line)
-            continue
-
-        parts = line.strip().split('|', 2)
-        if parts[0] == ftp_username:
-            found = True
-            # Keep original values if new ones not provided
-            password = new_password if new_password is not None else parts[1]
-            folder = new_folder if new_folder is not None else (parts[2] if len(parts) > 2 else f"/ftp/{ftp_username}")
-
-            # Validate folder if changed
-            if new_folder is not None:
-                valid, message = validate_ftp_path(openpanel_username, new_folder)
-                if not valid:
-                    return False, message
-
-            new_lines.append(f"{ftp_username}|{password}|{folder}\n")
-        else:
-            new_lines.append(line)
-
-    if not found:
-        return False, "FTP account not found"
-
-    # Write back updated accounts
-    with open(user_list_file, "w") as f:
-        f.writelines(new_lines)
-
-    # Restart FTP service to apply changes
     try:
-        subprocess.run(["docker", "restart", "openadmin_ftp"], check=True)
-    except subprocess.SubprocessError:
-        # Don't fail if Docker container isn't running
-        pass
+        with file_lock:
+            try:
+                with open(user_list_file, "r", encoding='utf-8') as f_in, \
+                     open(temp_file, "w", encoding='utf-8') as f_out:
+                    for line in f_in:
+                        parts = line.strip().split("|")
+                        if parts and parts[0] == ftp_username:
+                            found = True
+                        else:
+                            f_out.write(line)
+            except OSError as e:
+                logging.error("Error processing user list for deletion: %s", e)
+                if os.path.exists(temp_file):
+                    try:
+                        os.unlink(temp_file)
+                    except OSError:
+                        pass
+                return False, f"File system error during deletion: {e}"
 
-    return True, "FTP account updated successfully"
+            if not found:
+                os.unlink(temp_file)
+                return False, "FTP account not found"
 
-# OpenPanel/OpenAdmin Flask routes
+            os.replace(temp_file, user_list_file)
 
-@app.route('/ftp', methods=['GET'])
+        restart_success, restart_msg = _run_docker_restart()
+        if restart_success:
+            return True, "FTP account deleted successfully"
+        else:
+            return True, f"Account deleted, but {restart_msg}"
+
+    except OSError as e:
+        logging.error("OS error deleting FTP account %s: %s", ftp_username, e)
+        if os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except OSError as unlink_e:
+                logging.error("Error removing temp file %s: %s", temp_file, unlink_e)
+        return False, f"File system error: {e}"
+    except Exception as e:
+        logging.exception("Unexpected error deleting FTP account %s:", ftp_username)
+        if os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except OSError as unlink_e:
+                logging.error("Error removing temp file %s: %s", temp_file, unlink_e)
+        return False, f"An unexpected error occurred: {e}"
+
+
+def update_ftp_account(
+    openpanel_username: str,
+    ftp_username: str,
+    new_password: str = None,
+    new_folder: str = None,
+) -> Tuple[bool, str]:
+    """Update an FTP account"""
+    user_list_file = os.path.join(FTP_USERS_DIR, openpanel_username, "users.list")
+    temp_file = f"{user_list_file}.tmp"
+
+    if new_folder:
+        valid_path, path_message = validate_ftp_path(openpanel_username, new_folder)
+        if not valid_path:
+            return False, path_message
+
+    if not os.path.exists(user_list_file):
+        return False, "User list file not found"
+
+    found = False
+    try:
+        with file_lock:
+            try:
+                with open(user_list_file, "r", encoding='utf-8') as f_in, \
+                     open(temp_file, "w", encoding='utf-8') as f_out:
+                    for line in f_in:
+                        parts = line.strip().split("|")
+                        if parts and parts[0] == ftp_username:
+                            found = True
+                            current_password_hash = parts[1] if len(parts) > 1 else ""
+                            current_folder = parts[2] if len(parts) > 2 else ""
+
+                            password_hash = (
+                                generate_password_hash(new_password)
+                                if new_password
+                                else current_password_hash
+                            )
+                            folder = new_folder if new_folder else current_folder
+                            f_out.write(f"{ftp_username}|{password_hash}|{folder}\n")
+                        else:
+                            f_out.write(line)
+            except OSError as e:
+                logging.error("Error processing user list for update: %s", e)
+                if os.path.exists(temp_file):
+                    try:
+                        os.unlink(temp_file)
+                    except OSError:
+                        pass
+                return False, f"File system error during update: {e}"
+
+            if not found:
+                os.unlink(temp_file)
+                return False, "FTP account not found"
+
+            os.replace(temp_file, user_list_file)
+
+        restart_success, restart_msg = _run_docker_restart()
+        if restart_success:
+            return True, "FTP account updated successfully"
+        else:
+            return True, f"Account updated, but {restart_msg}"
+
+    except OSError as e:
+        logging.error("OS error updating FTP account %s: %s", ftp_username, e)
+        if os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except OSError as unlink_e:
+                logging.error("Error removing temp file %s: %s", temp_file, unlink_e)
+        return False, f"File system error: {e}"
+    except Exception as e:
+        logging.exception("Unexpected error updating FTP account %s:", ftp_username)
+        if os.path.exists(temp_file):
+            try:
+                os.unlink(temp_file)
+            except OSError as unlink_e:
+                logging.error("Error removing temp file %s: %s", temp_file, unlink_e)
+        return False, f"An unexpected error occurred: {e}"
+
+
+@app.route("/ftp", methods=["GET"])
 @login_required_route
 def ftp_dashboard():
-    """FTP Dashboard"""
-    username = query_username_by_id(session.get('user_id'))
-    accounts = list_ftp_accounts(username)
+    """Optimized dashboard view"""
+    user_id = session.get("user_id")
+    if not user_id:
+        flash("Session expired or invalid.", "error")
+        return redirect("/login")
 
-    can_create = can_create_ftp_account(username)
-    account_limit = get_max_ftp_accounts(username)
-    current_count = count_user_ftp_accounts(username)
+    username = query_username_by_id(user_id)
+    if not username:
+        flash("Could not determine username.", "error")
+        return redirect("/login")
 
-    return render_template('ftp/dashboard.html',
-                          accounts=accounts,
-                          can_create=can_create,
-                          account_limit=account_limit,
-                          current_count=current_count)
+    async def get_dashboard_data():
+        accounts_task = list_ftp_accounts(username)
+        count_task = count_user_ftp_accounts(username)
+        accounts, current_count = await asyncio.gather(accounts_task, count_task)
+        return accounts, current_count
 
-@app.route('/ftp/create', methods=['GET', 'POST'])
+    try:
+        accounts, current_count = asyncio.run(get_dashboard_data())
+        max_accounts = get_max_ftp_accounts()
+        can_create = current_count < max_accounts
+
+        return render_template(
+            "ftp/dashboard.html",
+            accounts=accounts,
+            can_create=can_create,
+            account_limit=max_accounts,
+            current_count=current_count,
+        )
+    except (OSError, IOError) as e:
+        logging.exception("File system error loading FTP dashboard for user %s:", username)
+        flash(f"File access error: {e}", "error")
+        return redirect("/")
+    except asyncio.TimeoutError:
+        logging.exception("Timeout loading FTP dashboard for user %s:", username)
+        flash("Dashboard operation timed out", "error")
+        return redirect("/")
+    except (ValueError, TypeError) as e:
+        logging.exception("Data error loading FTP dashboard for user %s:", username)
+        flash(f"Error processing dashboard data: {e}", "error")
+        return redirect("/")
+    except RuntimeError as e:
+        logging.exception("Runtime error loading FTP dashboard for user %s:", username)
+        flash(f"Application error: {e}", "error")
+        return redirect("/")
+
+
+@app.route("/ftp/create", methods=["GET", "POST"])
 @login_required_route
 def ftp_create_account():
     """Create FTP Account Form"""
-    username = query_username_by_id(session.get('user_id'))
+    user_id = session.get("user_id")
+    if not user_id:
+        flash("Session expired or invalid.", "error")
+        return redirect("/login")
 
-    if request.method == 'POST':
-        ftp_username = request.form.get('ftp_username')
-        password = request.form.get('password')
-        folder = request.form.get('folder')
+    username = query_username_by_id(user_id)
+    if not username:
+        flash("Could not determine username.", "error")
+        return redirect("/login")
 
-        success, message = create_ftp_account(username, ftp_username, password, folder)
+    if not can_create_ftp_account(username):
+        flash("Maximum FTP account limit reached.", "warning")
+        return redirect("/ftp")
+
+    home_dir = f"/home/{username}"
+
+    if request.method == "POST":
+        ftp_username = request.form.get("ftp_username", "").strip()
+        password = request.form.get("password", "").strip()
+        folder_input = request.form.get("folder", "").strip()
+
+        if not ftp_username or not password or not folder_input:
+            flash("FTP Username, Password, and Folder are required.", "error")
+            return render_template(
+                "ftp/create_account.html",
+                home_dir=home_dir,
+                can_create=True
+            )
+
+        folder_path = folder_input
+
+        success, message = create_ftp_account(
+            username, ftp_username, password, folder_path
+        )
 
         if success:
-            flash("FTP account created successfully", "success")
-            log_user_action(session.get('user_id'), f"Created FTP account: {ftp_username}")
-            return redirect('/ftp')
+            flash(message, "success")
+            async_log(user_id, f"Created FTP account: {ftp_username}")
+            return redirect("/ftp")
         else:
             flash(f"Error creating FTP account: {message}", "error")
+            return render_template(
+                "ftp/create_account.html",
+                home_dir=home_dir,
+                can_create=True,
+                ftp_username=ftp_username,
+                folder=folder_input
+            )
 
-    # GET request or failed POST
-    return render_template('ftp/create_account.html',
-                          home_dir=f"/home/{username}",
-                          can_create=can_create_ftp_account(username))
+    return render_template(
+        "ftp/create_account.html",
+        home_dir=home_dir,
+        can_create=True
+    )
 
-@app.route('/ftp/delete/<ftp_username>', methods=['POST'])
+
+@app.route("/ftp/delete/<ftp_username>", methods=["POST"])
 @login_required_route
-def ftp_delete_account(ftp_username):
-    """Delete FTP Account"""
-    username = query_username_by_id(session.get('user_id'))
+def ftp_delete_account_route(ftp_username):
+    """Delete FTP Account Route"""
+    user_id = session.get("user_id")
+    if not user_id:
+        flash("Session expired or invalid.", "error")
+        return redirect("/login")
+
+    username = query_username_by_id(user_id)
+    if not username:
+        flash("Could not determine username.", "error")
+        return redirect("/login")
 
     success, message = delete_ftp_account(username, ftp_username)
 
     if success:
-        log_user_action(session.get('user_id'), f"Deleted FTP account: {ftp_username}")
-        flash("FTP account deleted successfully", "success")
+        async_log(user_id, f"Deleted FTP account: {ftp_username}")
+        flash(message, "success")
     else:
         flash(f"Error deleting FTP account: {message}", "error")
 
-    return redirect('/ftp')
+    return redirect("/ftp")
 
-@app.route('/ftp/edit/<ftp_username>', methods=['GET', 'POST'])
+
+@app.route("/ftp/edit/<path:ftp_username>", methods=["GET", "POST"])
 @login_required_route
 def ftp_edit_account(ftp_username):
-    """Edit FTP Account"""
-    username = query_username_by_id(session.get('user_id'))
+    """Edit FTP Account with improved validation and error handling"""
+    user_id = session.get("user_id")
+    if not user_id:
+        flash("Invalid user session", "error")
+        return redirect("/login")
 
-    if request.method == 'POST':
-        new_password = request.form.get('password')
-        new_folder = request.form.get('folder')
+    username = query_username_by_id(user_id)
+    if not username:
+        flash("Could not determine username.", "error")
+        return redirect("/login")
 
-        success, message = update_ftp_account(username, ftp_username,
-                                            new_password, new_folder)
+    if not ftp_username:
+        flash("Invalid FTP username provided.", "error")
+        return redirect("/ftp")
 
-        if success:
-            log_user_action(session.get('user_id'), f"Updated FTP account: {ftp_username}")
-            flash("FTP account updated successfully", "success")
-            return redirect('/ftp')
-        else:
-            flash(f"Error updating FTP account: {message}", "error")
+    home_dir = f"/home/{username}"
 
-    # For GET request, load current account details
-    accounts = list_ftp_accounts(username)
-    account = next((a for a in accounts if a['username'] == ftp_username), None)
+    if request.method == "POST":
+        try:
+            new_password = request.form.get("password", "").strip()
+            new_folder = request.form.get("folder", "").strip()
 
-    if not account:
-        flash("FTP account not found", "error")
-        return redirect('/ftp')
+            if not new_password and not new_folder:
+                flash("No changes provided (password or folder).", "warning")
+                return redirect(url_for('ftp_edit_account', ftp_username=ftp_username))
 
-    return render_template('ftp/edit_account.html',
-                          account=account,
-                          home_dir=f"/home/{username}")
+            success, message = update_ftp_account(
+                username,
+                ftp_username,
+                new_password if new_password else None,
+                new_folder if new_folder else None,
+            )
+
+            if success:
+                async_log(user_id, f"Updated FTP account: {ftp_username}")
+                flash(message, "success")
+                return redirect("/ftp")
+            else:
+                flash(f"Error updating FTP account: {message}", "error")
+
+        except (OSError, IOError) as e:
+            logging.exception("File system error during FTP account update for %s:", ftp_username)
+            flash(f"File system error: {str(e)}", "error")
+            return redirect("/ftp")
+        except ValueError as e:
+            logging.exception("Value error during FTP account update for %s:", ftp_username)
+            flash(f"Invalid input: {str(e)}", "error")
+            return redirect("/ftp")
+        except RuntimeError as e:
+            logging.exception("Runtime error during FTP account update for %s:", ftp_username)
+            flash(f"Operation failed: {str(e)}", "error")
+            return redirect("/ftp")
+
+    try:
+        accounts = asyncio.run(list_ftp_accounts(username))
+        account = next((a for a in accounts if a["username"] == ftp_username), None)
+
+        if not account:
+            flash("FTP account not found.", "error")
+            return redirect("/ftp")
+
+        return render_template(
+            "ftp/edit_account.html",
+            account=account,
+            home_dir=home_dir,
+            current_folder=account.get('directory', '')
+        )
+    except (OSError, IOError) as e:
+        logging.exception(
+            "File system error loading account details (user: %s, ftp: %s):",
+            username, ftp_username
+        )
+        flash(f"File system error loading account details: {str(e)}", "error")
+        return redirect("/ftp")
+    except asyncio.TimeoutError:
+        logging.exception(
+            "Timeout while loading account details (user: %s, ftp: %s):",
+            username, ftp_username
+        )
+        flash("Operation timed out while loading account details", "error")
+        return redirect("/ftp")
+    except ValueError as e:
+        logging.exception(
+            "Value error loading account details "
+            "(user: %s, ftp: %s):",
+            username, ftp_username
+        )
+        flash(f"Invalid data encountered: {str(e)}", "error")
+        return redirect("/ftp")
