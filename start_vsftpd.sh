@@ -14,7 +14,7 @@ is_fqdn() {
 
 # Function to get the server's IP address
 get_ip_address() {
-  hostname -I | awk '{print $1}'
+  hostname -i
 }
 
 # Function to read users from users.list files and create them
