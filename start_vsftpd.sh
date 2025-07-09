@@ -1,20 +1,7 @@
 #!/bin/sh
 
-#Remove all ftp users
+# Remove all ftp users
 grep '/ftp/' /etc/passwd | cut -d':' -f1 | xargs -r -n1 deluser
-
-#Create users
-#USERS='name1|password1|[folder1][|uid1][|gid1] name2|password2|[folder2][|uid2][|gid2]'
-#may be:
-# user|password foo|bar|/home/foo
-#OR
-# user|password|/home/user/dir|10000
-#OR
-# user|password|/home/user/dir|10000|10000
-#OR
-# user|password||10000|82
-
-#no default user
 
 # Function to determine if a hostname is a FQDN
 is_fqdn() {
@@ -36,7 +23,7 @@ create_users() {
 
   for USER_LIST_FILE in $USER_LIST_FILES; do
     BASE_DIR=$(dirname "$USER_LIST_FILE")
-    while IFS='|' read -r NAME PASS FOLDER UID GID; do
+    while IFS='|' read -r NAME HASHED_PASS FOLDER UID GID; do
       [ -z "$NAME" ] && continue  # Skip empty lines
 
       GROUP=$NAME
@@ -45,7 +32,7 @@ create_users() {
         FOLDER="/ftp/$NAME"
       fi
 
-      # Ensure the folder starts with /home and matches the base directory where users.list is found
+      # Ensure the folder starts with /home and matches the base directory
       if [[ $FOLDER != /home/* ]] || [[ ! $FOLDER == "$BASE_DIR"* ]]; then
         echo "Skipping user $NAME: folder $FOLDER does not match base directory $BASE_DIR or does not start with /home"
         continue
@@ -65,10 +52,17 @@ create_users() {
         fi
       fi
 
-      echo -e "$PASS\n$PASS" | adduser -h $FOLDER -s /sbin/nologin $UID_OPT $GROUP_OPT $NAME
-      mkdir -p $FOLDER
-      chown $NAME:$GROUP $FOLDER
-      unset NAME PASS FOLDER UID GID GROUP UID_OPT GROUP_OPT
+      # Create user without password
+      adduser -h "$FOLDER" -s /sbin/nologin $UID_OPT $GROUP_OPT --disabled-password --gecos "" "$NAME"
+
+      # Set encrypted password (assumes HASHED_PASS is in $6$ format)
+      usermod -p "$HASHED_PASS" "$NAME"
+
+      # Ensure home directory exists and is owned correctly
+      mkdir -p "$FOLDER"
+      chown "$NAME:$GROUP" "$FOLDER"
+
+      unset NAME HASHED_PASS FOLDER UID GID GROUP UID_OPT GROUP_OPT
     done < "$USER_LIST_FILE"
   done
 }
