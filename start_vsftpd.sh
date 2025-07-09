@@ -8,8 +8,9 @@ print_banner() {
 
 print_banner
 
-echo "[*] Removing all existing FTP users..."
-grep '/ftp/' /etc/passwd | cut -d':' -f1 | xargs -r -n1 deluser
+# not needed on startup!
+#echo "[*] Removing all existing FTP users..."
+#grep '/ftp/' /etc/passwd | cut -d':' -f1 | xargs -r -n1 deluser
 
 # Function to determine if a hostname is a FQDN
 is_fqdn() {
