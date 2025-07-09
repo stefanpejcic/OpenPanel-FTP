@@ -1,129 +1,99 @@
 #!/bin/bash
 
-# this script should be run only on servers that have OpenPanel installed.
-# to use OpenPanel-FTP as a standalone ftp server, check the readme
-
+# Configuration
 PANEL_CONFIG="/etc/openpanel/openpanel/conf/openpanel.config"
-GIT_URL="https://github.com/stefanpejcic/OpenPanel-FTP/archive/refs/heads/master.zip"
-ETC_DIR="/etc/openpanel/ftp/users/"
+CONTAINER_NAME="openadmin_ftp"
 
-apt-get install zip -y
+# Exit on any error
+set -e
 
-# OpenPanel?
-check_openpanel_installed() {
-  if [ -f $PANEL_CONFIG ]; then
-    return 0
-  else
-    return 1
-  fi
+# Utility functions
+log() { echo "[*] $1"; }
+error() { echo "ERROR: $1" >&2; exit 1; }
+
+# Check if OpenPanel is installed
+is_openpanel_installed() {
+    [[ -f "$PANEL_CONFIG" ]]
 }
 
-# run container
-run_docker_container() {
-  cd /root && docker compose up openadmin_ftp -d
+# Start FTP container
+start_ftp_container() {
+    log "Starting FTP container..."
+    cd /root && docker --context=default compose up "$CONTAINER_NAME" -d
 }
 
-
-# open ports
-open_ports() {
-
-# Check for CSF
-if command -v csf >/dev/null 2>&1; then
-  function open_port_csf() {
-      local port=$1
-      local csf_conf="/etc/csf/csf.conf"
-      
-      # Check if port is already open
-      port_opened=$(grep "TCP_IN = .*${port}" "$csf_conf")
-      if [ -z "$port_opened" ]; then
-          # Open port
-          sed -i "s/TCP_IN = \"\(.*\)\"/TCP_IN = \"\1,${port}\"/" "$csf_conf"
-          echo "Port ${port} opened in CSF."
-          ports_opened=1
-      else
-          echo "Port ${port} is already open in CSF."
-      fi
-  }
-  
-  open_port_csf 21
-  open_port_csf 21000:21010
-  csf -r
-      
-# Check for UFW
-elif command -v ufw >/dev/null 2>&1; then
-
-  ufw allow 21/tcp
-  for port in $(seq 21000 21010); do
-    ufw allow $port/tcp
-  done
-  ufw reload
-  
-else
-    echo "Error: Neither CSF nor UFW are detected. If using external firewall make sure to open ports: '21' and '21000:21010'."
-fi
-
-
-
-
-
-
+# Check if container is running
+is_container_running() {
+    docker --context=default ps --filter "name=$CONTAINER_NAME" --filter "status=running" | grep -q "$CONTAINER_NAME"
 }
 
-#cleanup
-cleanup() {
-  rm file.zip
-  rm -rf OpenPanel-FTP-master
-} 
+# Enable FTP module in OpenPanel config
+enable_ftp_module() {
+    if grep -q "^enabled_modules=.*ftp" "$PANEL_CONFIG"; then
+        log "FTP module already enabled."
+    else
+        log "Enabling FTP module..."
+        sed -i '/^enabled_modules=/ s/$/,ftp/' "$PANEL_CONFIG"
+        docker --context=default restart openpanel
+        log "OpenPanel restarted to apply changes."
+    fi
+}
 
-
-
-# Main script
-if check_openpanel_installed; then
-  echo "OpenPanel is installed. Proceeding with Docker container setup and port opening."
-      run_docker_container
-  fi
-
-
-  # if container started, we continue..
-  if docker ps --filter "name=openadmin_ftp" --filter "status=running" | grep -q openadmin_ftp; then
-  
-  # Check if 'ftp' is in the enabled_modules line
-  if grep -q "^enabled_modules=.*ftp" "$PANEL_CONFIG"; then
-    # ftp already exists in enabled modules!
-    echo "FTP Module is already enabled in OpenPanel configuration."
-  else
-    # nope, add it!
-    echo "Adding FTP to enabled_modules for OpenPanel."
-    sed -i '/^enabled_modules=/ s/$/,ftp/' "$PANEL_CONFIG"
-  fi
+# Open firewall ports using CSF
+open_firewall_ports() {
+    if ! command -v csf >/dev/null 2>&1; then
+        log "CSF not found. Manually open ports 21 and 21000:21010 in your firewall."
+        return
+    fi
     
-  
-    # reload services
-    echo "Reloading OpenPanel and OpenAdmin services to apply changes."
-    #service admin reload
-    docker restart openpanel
+    local csf_conf="/etc/csf/csf.conf"
+    local ports_changed=false
     
-  else
-    # Oops!
-    echo ""
-    echo "ERROR: openadmin_ftp container is not running. Exiting..."
-    echo ""
-    docker stop openadmin_ftp
-    docker rm openadmin_ftp
-    exit 1
-  fi
+    # Function to open a port in CSF
+    open_port() {
+        local port=$1
+        if ! grep -q "TCP_IN = .*${port}" "$csf_conf"; then
+            sed -i "s/TCP_IN = \"\(.*\)\"/TCP_IN = \"\1,${port}\"/" "$csf_conf"
+            log "Opened port $port in CSF."
+            ports_changed=true
+        fi
+    }
+    
+    open_port 21
+    open_port "21000:21010"
+    
+    $ports_changed && csf -r
+}
 
-  # ufw
-  open_ports
+# Main execution
+main() {
+    
+    # Check OpenPanel installation
+    is_openpanel_installed || error "OpenPanel not installed."
 
-  #rm
-  cleanup
+    log "Setting up FTP service..."
 
-  echo ""
-  echo "SUCCESS: FTP is now running and enabled for all OpenPanel users."
-  echo ""
-else
-  echo ""
-  echo "ERROR: OpenPanel is not installed. To run a standalone FTP without OpenPanel, please read the README.md file."
-  echo ""
-fi
+    # Start container
+    start_ftp_container
+    
+    # Verify container is running
+    is_container_running || {
+        log "Container failed to start. Cleaning up..."
+        docker --context=default stop "$CONTAINER_NAME" 2>/dev/null || true
+        docker --context=default rm "$CONTAINER_NAME" 2>/dev/null || true
+        error "FTP container failed to start."
+    }
+    
+    # Configure OpenPanel
+    enable_ftp_module
+    
+    # Configure firewall
+    open_firewall_ports
+    
+    log ""
+    log "SUCCESS: FTP is now running and enabled for all OpenPanel users."
+    log ""
+}
+
+# Run main function
+main "$@"
