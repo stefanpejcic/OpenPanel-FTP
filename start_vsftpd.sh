@@ -8,9 +8,30 @@ print_banner() {
 
 print_banner
 
-# not needed on startup!
-#echo "[*] Removing all existing FTP users..."
-#grep '/ftp/' /etc/passwd | cut -d':' -f1 | xargs -r -n1 deluser
+echo "[*] Collecting lists of FTP users from all OpenPanel accounts..."
+
+USERS=""
+
+for dir in /etc/openpanel/ftp/users/*; do
+    file="$dir/users.list"
+    user=$(basename "$dir")
+    if [ -f "$file" ]; then
+        while IFS= read -r line; do
+            # Replace /var/www/html/ with /home/... docker path
+            modified_line=$(echo "$line" | sed "s|/var/www/html/|/home/${user}/docker-data/volumes/${user}_html_data/_data/|g")
+            USERS="$USERS$modified_line "
+        done < "$file"
+    fi
+done
+
+echo "[*] Updating cached list in '/etc/openpanel/ftp/all.users' file..."
+echo "USERS=\"$USERS\"" > /etc/openpanel/ftp/all.users
+
+
+
+
+echo "[*] Removing all existing FTP users..."
+grep '/ftp/' /etc/passwd | cut -d':' -f1 | xargs -r -n1 deluser
 
 # Function to determine if a hostname is a FQDN
 is_fqdn() {
@@ -47,23 +68,32 @@ create_users() {
         echo "    - No folder specified, using default: $FOLDER"
       fi
 
-      # Ensure the folder starts with /home and matches the base directory
-      if [[ $FOLDER != /home/* ]] || [[ ! $FOLDER == "$BASE_DIR"* ]]; then
-        echo "    - Skipping user $NAME: folder $FOLDER does not match base directory $BASE_DIR or does not start with /home"
-        continue
+      # Replace legacy path if needed
+      FOLDER=$(echo "$FOLDER" | sed "s|/var/www/html/|/home/${NAME%%.*}/docker-data/volumes/${NAME%%.*}_html_data/_data/|g")
+
+      # Validate folder starts with /home
+      case "$FOLDER" in
+        /home/*) ;;
+        *)
+          echo "    - Skipping user $NAME: folder $FOLDER is invalid"
+          continue
+          ;;
+      esac
+
+      UID_OPT=""
+      GROUP_OPT=""
+
+      if [ -n "$UID" ]; then
+        UID_OPT="-u $UID"
       fi
 
-      if [ ! -z "$UID" ]; then
-        UID_OPT="-u $UID"
-        if [ -z "$GID" ]; then
-          GID=$UID
-        fi
-        GROUP=$(getent group $GID | cut -d: -f1)
-        if [ ! -z "$GROUP" ]; then
+      if [ -n "$GID" ]; then
+        GROUP=$(getent group "$GID" | cut -d: -f1)
+        if [ -n "$GROUP" ]; then
           GROUP_OPT="-G $GROUP"
-        elif [ ! -z "$GID" ]; then
+        else
           echo "    - Creating group $NAME with GID $GID"
-          addgroup -g $GID $NAME
+          addgroup -g "$GID" "$NAME"
           GROUP_OPT="-G $NAME"
         fi
       fi
@@ -120,11 +150,11 @@ else
 fi
 
 # Configure address and TLS options
-if [ ! -z "$ADDRESS" ]; then
+if [ -n "$ADDRESS" ]; then
   ADDR_OPT="-opasv_address=$ADDRESS"
 fi
 
-if [ ! -z "$TLS_CERT" ] || [ ! -z "$TLS_KEY" ]; then
+if [ -n "$TLS_CERT" ] || [ -n "$TLS_KEY" ]; then
   echo "[*] TLS certificates found, enabling TLS options"
   TLS_OPT="-orsa_cert_file=$TLS_CERT -orsa_private_key_file=$TLS_KEY -ossl_enable=YES -oallow_anon_ssl=NO -oforce_local_data_ssl=YES -oforce_local_logins_ssl=YES -ossl_tlsv1=NO -ossl_sslv2=NO -ossl_sslv3=NO -ossl_ciphers=HIGH"
 else
@@ -132,7 +162,7 @@ else
 fi
 
 # Used to run custom commands inside container
-if [ ! -z "$1" ]; then
+if [ -n "$1" ]; then
   echo "[*] Executing custom command: $*"
   exec "$@"
 else
