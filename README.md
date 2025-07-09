@@ -44,7 +44,7 @@ Adding accounts:
 docker exec -it openadmin_ftp sh -c 'echo -e "${PASSWORD}\n${PASSWORD}" | adduser -h $DIRECTORY -s /sbin/nologin $USERNAME'
 
 # to create permanent ftp account that will be created on docker restart:
-echo "$USERNAME|$PASSWORD|$DIRECTORY" >> /etc/openpanel/ftp/users/users.list
+echo "$USERNAME|$HASHEDPASSWORD|$DIRECTORY|$UID|$GID" >> /etc/openpanel/ftp/users/users.list
 ```
 
 -----
