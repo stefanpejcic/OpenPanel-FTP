@@ -72,11 +72,12 @@ create_users() {
   for USER_LIST_FILE in $USER_LIST_FILES; do
     BASE_DIR=$(dirname "$USER_LIST_FILE")
     OPENPANEL_USER=$(basename "$BASE_DIR")
-    echo "[*] Processing users for OpenPanel account: $OPENPANEL_USER"
+    echo "[!] Processing users for OpenPanel account: $OPENPANEL_USER"
     while IFS='|' read -r NAME HASHED_PASS FOLDER UID GID; do
+      USER_COUNT=$((USER_COUNT + 1))
       [ -z "$NAME" ] && continue  # Skip empty lines
       GROUP="${NAME#*.}"
-      echo "[*] Creating user ${NAME} [${USER_COUNT}/${TOTAL_USER_COUNT}]"
+      echo "[+] Creating user ${NAME} [${USER_COUNT}/${TOTAL_USER_COUNT}]"
       FAKE_FOLDER="$FOLDER" # used for display only!
       if [ -z "$FOLDER" ]; then
         FOLDER="/var/www/html/"
@@ -118,13 +119,18 @@ create_users() {
       adduser -h "$FOLDER" -s /sbin/nologin $UID_OPT $GROUP_OPT --disabled-password --gecos "" "$NAME"
 
       echo "    - Setting encrypted password '$HASHED_PASS'"
-      usermod -p "$HASHED_PASS" "$NAME"
+      if usermod -p "$HASHED_PASS" "$NAME"; then
+          echo "    - Password set successfully"
+      else
+          echo "    - Failed to set password, removing user $NAME"
+          userdel "$NAME"
+          continue
+      fi
 
       echo "    - Ensuring folder exists and ownership is correct (${UID}:${GID})"
       mkdir -p "$FOLDER"
       chown "${UID}:${GID}" "$FOLDER"
 
-      USER_COUNT=$((USER_COUNT + 1))
       echo ""
       unset NAME HASHED_PASS FOLDER UID GID GROUP UID_OPT GROUP_OPT
     done < "$USER_LIST_FILE"
@@ -177,6 +183,7 @@ else
   echo "[*] No TLS certificates found, running without TLS"
 fi
 
+
 # Used to run custom commands inside container
 if [ -n "$1" ]; then
   echo "[*] Executing custom command: $*"
@@ -186,5 +193,6 @@ else
   vsftpd -opasv_min_port=$MIN_PORT -opasv_max_port=$MAX_PORT $ADDR_OPT $TLS_OPT /etc/vsftpd/vsftpd.conf
   [ -d /var/run/vsftpd ] || mkdir /var/run/vsftpd
   pgrep vsftpd | tail -n 1 > /var/run/vsftpd/vsftpd.pid
+  echo "-------------------------------------------"
   exec pidproxy /var/run/vsftpd/vsftpd.pid true
 fi
