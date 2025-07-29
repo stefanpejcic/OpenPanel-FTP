@@ -58,10 +58,10 @@ create_users() {
     BASE_DIR=$(dirname "$USER_LIST_FILE")
     while IFS='|' read -r NAME HASHED_PASS FOLDER UID GID; do
       [ -z "$NAME" ] && continue  # Skip empty lines
+      GROUP="${NAME#*.}"
+    
+      echo "[*] Creating user: $NAME ($GROUP)"
 
-      echo "[*] Creating user: $NAME"
-
-      GROUP=$NAME
 
       if [ -z "$FOLDER" ]; then
         FOLDER="/ftp/$NAME"
@@ -69,7 +69,7 @@ create_users() {
       fi
 
       # Replace legacy path if needed
-      FOLDER=$(echo "$FOLDER" | sed "s|/var/www/html/|/home/${NAME%%.*}/docker-data/volumes/${NAME%%.*}_html_data/_data/|g")
+      FOLDER=$(echo "$FOLDER" | sed "s|/var/www/html/|/home/${GROUP}/docker-data/volumes/${NAME%%.*}_html_data/_data/|g")
 
       # Validate folder starts with /home
       case "$FOLDER" in
@@ -98,10 +98,10 @@ create_users() {
         fi
       fi
 
-      echo "    - Adding user with home folder $FOLDER"
+      echo "    - Adding user with home directory: $FOLDER"
       adduser -h "$FOLDER" -s /sbin/nologin $UID_OPT $GROUP_OPT --disabled-password --gecos "" "$NAME"
 
-      echo "    - Setting encrypted password"
+      echo "    - Setting encrypted password '$HASHED_PASS'"
       usermod -p "$HASHED_PASS" "$NAME"
 
       echo "    - Ensuring folder exists and ownership is correct"
