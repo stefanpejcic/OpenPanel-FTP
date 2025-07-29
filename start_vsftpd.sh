@@ -69,7 +69,7 @@ create_users() {
       fi
 
       # Replace legacy path if needed
-      FOLDER=$(echo "$FOLDER" | sed "s|/var/www/html/|/home/${GROUP}/docker-data/volumes/${NAME%%.*}_html_data/_data/|g")
+      FOLDER=$(echo "$FOLDER" | sed "s|/var/www/html/|/home/${GROUP}/docker-data/volumes/${GROUP}_html_data/_data/|g")
 
       # Validate folder starts with /home
       case "$FOLDER" in
@@ -88,13 +88,14 @@ create_users() {
       fi
 
       if [ -n "$GID" ]; then
-        GROUP=$(getent group "$GID" | cut -d: -f1)
-        if [ -n "$GROUP" ]; then
-          GROUP_OPT="-G $GROUP"
+        EXISTING_GROUP=$(getent group "$GID" | cut -d: -f1)
+        if [ -n "$EXISTING_GROUP" ]; then
+          echo "    - Group $EXISTING_GROUP already exists with GID $GID"
+          GROUP_OPT="-G $EXISTING_GROUP"
         else
-          echo "    - Creating group $NAME with GID $GID"
-          addgroup -g "$GID" "$NAME"
-          GROUP_OPT="-G $NAME"
+          echo "    - Creating group $GROUP with GID $GID"
+          addgroup -g "$GID" "$GROUP"
+          GROUP_OPT="-G $GROUP"
         fi
       fi
 
@@ -104,9 +105,9 @@ create_users() {
       echo "    - Setting encrypted password '$HASHED_PASS'"
       usermod -p "$HASHED_PASS" "$NAME"
 
-      echo "    - Ensuring folder exists and ownership is correct"
+      echo "    - Ensuring folder exists and ownership is correct (${UID}:${GID})"
       mkdir -p "$FOLDER"
-      chown "$NAME:$GROUP" "$FOLDER"
+      chown "${UID}:${GID}" "$FOLDER"
 
       USER_COUNT=$((USER_COUNT + 1))
 
