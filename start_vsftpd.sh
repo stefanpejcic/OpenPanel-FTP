@@ -68,15 +68,18 @@ create_users() {
 
   USER_COUNT=0
   echo "[*] Creating users from users.list files..."
+  
   for USER_LIST_FILE in $USER_LIST_FILES; do
-    echo "[*] Processing user list file: $USER_LIST_FILE"
     BASE_DIR=$(dirname "$USER_LIST_FILE")
+    OPENPANEL_USER=$(basename "$BASE_DIR")
+    echo "[*] Processing users for OpenPanel account: $OPENPANEL_USER"
     while IFS='|' read -r NAME HASHED_PASS FOLDER UID GID; do
       [ -z "$NAME" ] && continue  # Skip empty lines
       GROUP="${NAME#*.}"
-      echo "[*] Creating user $NAME [$USER_COUNT / $TOTAL_USER_COUNT]"
+      echo "[*] Creating user ${NAME} [${USER_COUNT}/${TOTAL_USER_COUNT}]"
+      FAKE_FOLDER="$FOLDER" # used for display only!
       if [ -z "$FOLDER" ]; then
-        FOLDER="/ftp/$NAME"
+        FOLDER="/var/www/html/"
         echo "    - No folder specified, using default: $FOLDER"
       fi
 
@@ -111,7 +114,7 @@ create_users() {
         fi
       fi
 
-      echo "    - Adding user with home directory: $FOLDER"
+      echo "    - Adding user with home directory: $FAKE_FOLDER"
       adduser -h "$FOLDER" -s /sbin/nologin $UID_OPT $GROUP_OPT --disabled-password --gecos "" "$NAME"
 
       echo "    - Setting encrypted password '$HASHED_PASS'"
@@ -122,7 +125,7 @@ create_users() {
       chown "${UID}:${GID}" "$FOLDER"
 
       USER_COUNT=$((USER_COUNT + 1))
-
+      echo ""
       unset NAME HASHED_PASS FOLDER UID GID GROUP UID_OPT GROUP_OPT
     done < "$USER_LIST_FILE"
   done
