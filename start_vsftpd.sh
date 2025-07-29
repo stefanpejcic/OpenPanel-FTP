@@ -49,7 +49,22 @@ get_ip_address() {
 
 # Function to read users from users.list files and create them
 create_users() {
+  echo "[*] Checking for existing users..."
   USER_LIST_FILES=$(find /etc/openpanel/ftp/users/ -name 'users.list')
+  TOTAL_USER_COUNT=0
+  for USER_LIST_FILE in $USER_LIST_FILES; do
+    while IFS='|' read -r NAME _; do
+      [ -z "$NAME" ] && continue  # empty
+      TOTAL_USER_COUNT=$((TOTAL_USER_COUNT + 1))
+    done < "$USER_LIST_FILE"
+  done
+
+  if [ "$TOTAL_USER_COUNT" -gt 0 ]; then
+    echo "[*] Total users that will be created: $TOTAL_USER_COUNT"
+  else
+    echo "[*] No users found to create."
+    return
+  fi
 
   USER_COUNT=0
   echo "[*] Creating users from users.list files..."
@@ -59,10 +74,7 @@ create_users() {
     while IFS='|' read -r NAME HASHED_PASS FOLDER UID GID; do
       [ -z "$NAME" ] && continue  # Skip empty lines
       GROUP="${NAME#*.}"
-    
-      echo "[*] Creating user: $NAME ($GROUP)"
-
-
+      echo "[*] Creating user $NAME [$USER_COUNT / $TOTAL_USER_COUNT]"
       if [ -z "$FOLDER" ]; then
         FOLDER="/ftp/$NAME"
         echo "    - No folder specified, using default: $FOLDER"
