@@ -2,7 +2,8 @@
 
 print_banner() {
   echo "-------------------------------------------"
-  echo "            Starting FTP server            "
+  echo " Starting FTP server (vsftpd)"
+  echo " Started at: $(date '+%Y-%m-%d %H:%M:%S %Z')"
   echo "-------------------------------------------"
 }
 
