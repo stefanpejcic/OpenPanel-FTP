@@ -47,8 +47,8 @@ echo "$USERNAME|$HASHEDPASSWORD|$DIRECTORY|$UID|$GID" >> /etc/openpanel/ftp/user
 
 ### Todo:
 - quotas
-- limits in ftp accounts per user
-- create groups
-- openpanel interface
-- openadmin interface
-- additional tweaks: ssl protocols, resource limiting..
+- ~limits in ftp accounts per user~
+- ~create groups~
+- ~openpanel interface~
+- ~openadmin interface~
+- ~additional tweaks: ssl protocols, resource limiting..~
