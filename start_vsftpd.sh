@@ -35,8 +35,10 @@ echo "USERS=\"$USERS\"" > /etc/openpanel/ftp/all.users
 
 # 4. remove all existing users
 echo "[*] Removing all existing FTP users..."
-#grep '/ftp/' /etc/passwd | cut -d':' -f1 | xargs -r -n1 deluser
 grep -E ':/sbin/nologin$' /etc/passwd | cut -d':' -f1 | xargs -r -n1 userdel
+
+# add nobody user for privilege droppping
+grep -q '^nobody:' /etc/passwd || echo "nobody:x:65534:65534:nobody:/:/sbin/nologin" >> /etc/passwd
 
 # 5. read from individual users.list files and create users
 echo "[*] Checking for existing users..."
