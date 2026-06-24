@@ -104,8 +104,9 @@ if [ "$TOTAL_USER_COUNT" -gt 0 ]; then
       echo "    - Adding user with home directory: $FAKE_FOLDER"
 
       # for user@domain format
-      useradd -d "$FOLDER" -s /sbin/nologin $UID_OPT $GROUP_OPT -M "$NAME" --badname
+      #useradd -d "$FOLDER" -s /sbin/nologin $UID_OPT $GROUP_OPT -M "$NAME" --badname
       #adduser -h "$FOLDER" -s /sbin/nologin $UID_OPT $GROUP_OPT --disabled-password --gecos "" "$NAME"
+      echo "$NAME:x:${UID}:${GID}::${FOLDER}:/sbin/nologin" >> /etc/passwd
 
       echo "    - Setting encrypted password '$HASHED_PASS'"
       if usermod -p "$HASHED_PASS" "$NAME"; then
