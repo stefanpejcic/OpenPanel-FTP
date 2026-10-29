@@ -208,8 +208,8 @@ if [ -z "$PASV_ADDRESS" ]; then
 fi
 
 PASV_OPTS=""
-if [[ "$PASV_ADDRESS" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] &&
-   awk -F. '{ for (i=1; i<=4; i++) if ($i > 255) exit 1 }' <<< "$PASV_ADDRESS"; then
+# plain sh (busybox), so no [[ =~ ]] or <<<
+if echo "$PASV_ADDRESS" | awk -F. 'NF != 4 { exit 1 } { for (i = 1; i <= 4; i++) if ($i !~ /^[0-9]+$/ || $i > 255) exit 1 }'; then
     echo "[*] Passive mode address: $PASV_ADDRESS"
     PASV_OPTS="-opasv_address=$PASV_ADDRESS -opasv_addr_resolve=NO"
 else
